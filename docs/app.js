@@ -421,8 +421,10 @@ function updateStatus(){
   if(!TRIP_ID){ el.setAttribute("data-s","idle"); textEl.textContent = ""; return; }
   var qn = queueLen();
   if(!window.TRIP_API || (TRIP_META && TRIP_META.localOnly && !TRIP_META.pendingInitialSync)){
+    // Сервера нет вовсе — отправлять некуда, и «не отправлено N» тут только пугает:
+    // человек подумает, что данные потерялись. Пишем честно: всё лежит на этом телефоне.
     el.setAttribute("data-s","local");
-    textEl.textContent = qn>0 ? T("status.offlineQueue",{n:qn}) : T("status.local");
+    textEl.textContent = T("status.local");
     return;
   }
   if(lastSyncError){
