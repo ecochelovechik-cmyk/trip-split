@@ -1,0 +1,19 @@
+# Конфиг Cloudflare Worker для «Дележка расходов в поездке».
+# database_id ниже — заглушка, реальный id подставляется в DEPLOY.md после
+# `wrangler d1 create trip-split-db`.
+
+name = "trip-split"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trip-split-db"
+database_id = "REPLACE_WITH_REAL_D1_DATABASE_ID"
+
+# Вечерняя сводка: раз в сутки в 15:00 UTC = 20:00 Ташкент (UTC+5, без DST).
+[triggers]
+crons = ["0 15 * * *"]
+
+# BOT_TOKEN — токен Telegram-бота. НЕ хранить здесь, только через
+# `wrangler secret put BOT_TOKEN` (см. DEPLOY.md), в файлы репозитория не класть.
