@@ -327,10 +327,24 @@ details.setup[open] > summary::after{content:'▴'}
 /* ---------- trip list screen ---------- */
 .tripcard{padding:14px 16px; border-top:1px solid var(--line)}
 .tripcard:first-child{border-top:none}
-.tripcard-name{font-family:'Unbounded',sans-serif; font-weight:600; font-size:16px}
+.tripcard-name{font-family:'Unbounded',sans-serif; font-weight:600; font-size:16px; display:flex; align-items:center; gap:2px}
 .tripcard-meta{font-size:12.5px; color:var(--muted); margin-top:2px}
 .tripcard-acts{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap}
 .badge{font-size:10px; letter-spacing:.06em; text-transform:uppercase; background:var(--neg-soft); color:var(--neg); padding:2px 7px; border-radius:6px; font-weight:700; margin-left:6px}
+
+/* ---------- favorite star ---------- */
+.fav-star{
+  border:none; background:transparent; padding:6px; margin:-6px 0; font-size:18px; line-height:1;
+  color:var(--line-strong); flex:none; min-height:44px; min-width:32px; display:inline-flex; align-items:center; justify-content:center;
+}
+.fav-star.on{color:var(--accent)}
+.fav-star:hover{color:var(--accent)}
+
+/* ---------- trip view tabs (обзор/история), родные radio, грабля №2 ---------- */
+.tabbar{margin-bottom:14px}
+
+/* ---------- category badge on expense rows ---------- */
+.catbadge{font-size:11.5px; font-weight:500; color:var(--muted); background:var(--surface-2); border-radius:6px; padding:1px 7px; white-space:nowrap; vertical-align:middle}
 
 @media (max-width:600px){
   .btn{padding:11px 15px; min-height:44px}

@@ -181,7 +181,8 @@ function reduceOps(ops) {
         state.expenses.push({
           id: p.eid, title: p.title, amount: p.amount, cur: p.cur,
           payer: p.payer, parts: Array.isArray(p.parts) ? p.parts.slice() : [],
-          date: p.date, note: p.note
+          date: p.date, note: p.note,
+          category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares
         });
         break;
 
@@ -193,7 +194,8 @@ function reduceOps(ops) {
           state.expenses[idx] = {
             id: p.eid, title: p.title, amount: p.amount, cur: p.cur,
             payer: p.payer, parts: Array.isArray(p.parts) ? p.parts.slice() : [],
-            date: p.date, note: p.note
+            date: p.date, note: p.note,
+            category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares
           };
         }
         break;
@@ -238,6 +240,32 @@ function toCents(state, amount, code) {
 }
 
 /**
+ * Проверяет валидность shares по правилам SPEC.md:
+ * - ключи shares обязаны быть подмножеством parts;
+ * - сумма значений shares обязана равняться amount с точностью до наименьшей
+ *   единицы валюты траты (для валют без копеек — до целого).
+ * Проверка ведётся в валюте траты (e.cur), без конвертации по курсу.
+ * @param {{amount:number, cur:string, parts:Array, shares:object}} e
+ * @returns {boolean}
+ */
+function isValidShares(e) {
+  const shares = e && e.shares;
+  if (!shares || typeof shares !== "object") return false;
+  const keys = Object.keys(shares);
+  if (!keys.length) return false;
+  const parts = Array.isArray(e.parts) ? e.parts : [];
+  for (const k of keys) {
+    if (!parts.includes(k)) return false;
+  }
+  const dec = NO_DEC[String(e.cur || "").toUpperCase()] ? 0 : 2;
+  const mult = Math.pow(10, dec);
+  let sum = 0;
+  for (const k of keys) sum += Math.round((Number(shares[k]) || 0) * mult);
+  const amt = Math.round((Number(e.amount) || 0) * mult);
+  return sum === amt;
+}
+
+/**
  * Считает по состоянию: сколько кто заплатил, чья доля, баланс.
  * Все деньги — в целых центах базовой валюты.
  * @returns {{rows: Array<{id,name,paid,share,settled,balance}>, totalCents:number}}
@@ -254,11 +282,39 @@ function computeBalances(state) {
     totalCents += cents;
     if (Object.prototype.hasOwnProperty.call(paid, e.payer)) paid[e.payer] += cents;
 
-    // остаток раздаётся по копейке первым rem участникам в порядке списка людей — детерминированно
+    // порядок участников — по порядку списка людей, детерминированно
     parts.sort((a, b) => order[a] - order[b]);
-    const per = Math.floor(cents / parts.length);
-    const rem = cents - per * parts.length;
-    parts.forEach((id, i) => { share[id] += per + (i < rem ? 1 : 0); });
+
+    if (isValidShares(e)) {
+      // валидный shares: каждая доля переводится в центы базовой валюты тем же
+      // курсом, что и вся трата; участники из parts без записи в shares — 0.
+      const rate = rateOf(state, e.cur);
+      const converted = {};
+      parts.forEach((id) => {
+        const v = Object.prototype.hasOwnProperty.call(e.shares, id) ? Number(e.shares[id]) || 0 : 0;
+        converted[id] = Math.round(v * rate * 100);
+      });
+      const sumConverted = parts.reduce((s, id) => s + converted[id], 0);
+      const remainder = cents - sumConverted;
+      // остаток из-за отдельного округления долей — по одной копейке первым
+      // участникам с ненулевой долей (в порядке списка людей); если таких нет —
+      // всем участникам parts в порядке списка.
+      const nonZero = parts.filter((id) => converted[id] !== 0);
+      const targets = nonZero.length ? nonZero : parts;
+      if (targets.length) {
+        const step = remainder >= 0 ? 1 : -1;
+        const n = Math.abs(remainder);
+        for (let i = 0; i < n; i++) {
+          converted[targets[i % targets.length]] += step;
+        }
+      }
+      parts.forEach((id) => { share[id] += converted[id]; });
+    } else {
+      // остаток раздаётся по копейке первым rem участникам в порядке списка людей — детерминированно
+      const per = Math.floor(cents / parts.length);
+      const rem = cents - per * parts.length;
+      parts.forEach((id, i) => { share[id] += per + (i < rem ? 1 : 0); });
+    }
   }
 
   const settled = {};
@@ -548,12 +604,9 @@ async function handleTelegramWebhook(request, env, url) {
   return jsonResponse({ ok: true });
 }
 
-function jsonResponse(obj, status) {
-  return new Response(JSON.stringify(obj), {
-    status: status || 200,
-    headers: { "content-type": "application/json; charset=utf-8" }
-  });
-}
+// jsonResponse — определена в worker.js (те же аргументы: data, status=200) и после
+// сборки в один файл видна и здесь благодаря hoisting; дублировать её нельзя —
+// в ES-модуле повторное объявление верхнеуровневой функции роняет весь Worker.
 
 // =============================================================================
 // 7. Вечерняя сводка (вызывается по Cron Trigger из worker.js)

@@ -12,8 +12,12 @@ var LS_TRIPS = "ts.trips";
 var LS_QUEUE_PREFIX = "ts.queue.";
 var LS_ME_PREFIX = "ts.me.";
 var LS_LANG = "ts.lang";
+var LS_HISTORY_PREFIX = "ts.history.";
+var HISTORY_MAX = 200;
 var POLL_MS = 8000;
 var APP_VERSION_DATE = "23.08.2026";
+var CATS = ["food","transport","lodging","fun","shopping","other"];
+var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
 // UZS/KGS без общепринятого юникод-символа — показываем код валюты (не зависит от языка интерфейса)
 var SYM = {USD:"$",EUR:"€",RUB:"₽",GBP:"£",JPY:"¥",CNY:"¥",TRY:"₺",KZT:"₸",THB:"฿",AED:"AED",GEL:"₾",INR:"₹",VND:"₫",KRW:"₩",AZN:"₼",AMD:"֏",PLN:"zł",ILS:"₪",EGP:"E£",MYR:"RM",IDR:"Rp"};
@@ -27,6 +31,8 @@ var TRIP_META = null;   // запись из ts.trips для этой поезд
 var S = null;            // TRIP_META.state — свёрнутое состояние поездки (см. SPEC "Итоговое состояние")
 var ME = null;           // participant id "кто я" на этом телефоне
 var filterText = "";
+var filterCategory = "";
+var TRIP_VIEW = "main"; // "main" | "history"
 var pollTimer = null;
 var syncBusy = false;
 var lastSyncError = null;
@@ -104,6 +110,23 @@ function saveMe(tripId, id){
 function loadLang(){ try{ return localStorage.getItem(LS_LANG) || "ru"; }catch(e){ return "ru"; } }
 function saveLang(v){ try{ localStorage.setItem(LS_LANG, v); }catch(e){} }
 
+/* ========== история действий: витрина, НЕ источник истины (см. SPEC.md) ========== */
+function loadHistory(tripId){
+  try{ var v = JSON.parse(localStorage.getItem(LS_HISTORY_PREFIX+tripId) || "[]"); return Array.isArray(v) ? v : []; }
+  catch(e){ return []; }
+}
+function saveHistory(tripId, arr){
+  try{ localStorage.setItem(LS_HISTORY_PREFIX+tripId, JSON.stringify(arr)); }
+  catch(e){ /* витрина необязательна — тихий отказ тут не теряет данные */ }
+}
+function pushHistory(tripId, op){
+  var arr = loadHistory(tripId);
+  arr.push({ seq: op.seq, kind: op.kind, ts: op.ts, author: op.author, payload: op.payload });
+  arr.sort(function(a,b){ return (a.seq||0) - (b.seq||0); });
+  if(arr.length > HISTORY_MAX) arr = arr.slice(arr.length - HISTORY_MAX);
+  saveHistory(tripId, arr);
+}
+
 function persistState(){
   if(!TRIP_ID || !TRIP_META) return;
   TRIP_META.state = S;
@@ -131,13 +154,45 @@ function freshState(){
     payments: []
   };
 }
+/* shares валиден, если сумма его значений (в валюте траты) равна amount с точностью
+   до наименьшей единицы валюты, и ключи ⊆ parts. Иначе — как будто shares не было
+   (см. SPEC.md "shares" и "Свёртка операций в состояние"). */
+function normalizeShares(p){
+  if(!p || typeof p.shares !== "object" || p.shares === null || Array.isArray(p.shares)) return null;
+  var parts = Array.isArray(p.parts) ? p.parts : [];
+  var partsSet = {};
+  parts.forEach(function(id){ partsSet[id] = true; });
+  var keys = Object.keys(p.shares);
+  if(!keys.length) return null;
+  for(var i=0;i<keys.length;i++){ if(!partsSet[keys[i]]) return null; }
+  var code = (p.cur||"USD").toUpperCase();
+  var unit = NO_DEC[code] ? 1 : 100;
+  var out = {}, sum = 0;
+  for(var j=0;j<keys.length;j++){
+    var v = Number(p.shares[keys[j]]);
+    if(!isFinite(v)) v = 0;
+    out[keys[j]] = v;
+    sum += Math.round(v*unit);
+  }
+  var target = Math.round((Number(p.amount)||0)*unit);
+  if(sum !== target) return null;
+  return out;
+}
+function normalizeCategory(p){
+  var c = (p && typeof p.category === "string") ? p.category.trim().toLowerCase() : "";
+  return CATS.indexOf(c) >= 0 ? c : "";
+}
 function expenseFromPayload(p){
-  return {
+  var out = {
     id: p.eid, title: p.title || "", amount: Number(p.amount)||0,
     cur: (p.cur||"USD").toUpperCase(), payer: p.payer,
     parts: Array.isArray(p.parts) ? p.parts.slice() : [],
-    date: p.date || "", note: p.note || ""
+    date: p.date || "", note: p.note || "",
+    category: normalizeCategory(p)
   };
+  var shares = normalizeShares(p);
+  if(shares) out.shares = shares;
+  return out;
 }
 function paymentFromPayload(p){
   return { id: p.payid, from: p.from, to: p.to, amount: Number(p.amount)||0, date: p.date || "", note: p.note || "" };
@@ -229,6 +284,38 @@ function moneyRaw(amount, code){
   return fmtNum(amount, code) + " " + sym;
 }
 
+/* Доля каждого участника в центах базовой валюты для одной траты (см. SPEC.md "Деньги").
+   Без shares — поровну, остаток по одной копейке первым по списку людей.
+   С валидным shares — каждая доля переводится в центы по курсу траты, участники parts
+   без записи получают 0; остаток округления (может быть и отрицательным) раздаётся
+   по той же схеме, но только между участниками с ненулевой долей (если такие есть). */
+function shareCentsForExpense(e, order){
+  var out = {};
+  var cents = toCents(e.amount, e.cur);
+  var parts = (e.parts||[]).filter(function(id){ return order.hasOwnProperty(id); });
+  if(!parts.length) return out;
+  if(e.shares){
+    var converted = {};
+    parts.forEach(function(id){
+      var v = e.shares.hasOwnProperty(id) ? Number(e.shares[id]) : 0;
+      converted[id] = toCents(isFinite(v) ? v : 0, e.cur);
+    });
+    var sum = 0; parts.forEach(function(id){ sum += converted[id]; });
+    var remainder = cents - sum;
+    var nonZero = parts.filter(function(id){ return converted[id] !== 0; });
+    var targets = (nonZero.length ? nonZero : parts.slice()).sort(function(a,b){ return order[a]-order[b]; });
+    var n = Math.abs(remainder), sign = remainder > 0 ? 1 : -1;
+    for(var i=0;i<targets.length;i++){ converted[targets[i]] += (i<n ? sign : 0); }
+    parts.forEach(function(id){ out[id] = converted[id]; });
+  } else {
+    var sorted = parts.slice().sort(function(a,b){ return order[a]-order[b]; });
+    var per = Math.floor(cents/sorted.length);
+    var rem = cents - per*sorted.length;
+    sorted.forEach(function(id,i){ out[id] = per + (i<rem?1:0); });
+  }
+  return out;
+}
+
 function compute(){
   var paid = {}, share = {}, order = {};
   S.people.forEach(function(p,i){ paid[p.id]=0; share[p.id]=0; order[p.id]=i; });
@@ -239,10 +326,8 @@ function compute(){
     if(!parts.length || !cents) return;
     totalCents += cents;
     if(paid.hasOwnProperty(e.payer)) paid[e.payer] += cents;
-    parts.sort(function(a,b){ return order[a]-order[b]; });
-    var per = Math.floor(cents/parts.length);
-    var rem = cents - per*parts.length;
-    parts.forEach(function(id,i){ share[id] += per + (i<rem?1:0); });
+    var sc = shareCentsForExpense(e, order);
+    parts.forEach(function(id){ share[id] += sc[id] || 0; });
   });
   var settled = {};
   S.people.forEach(function(p){ settled[p.id]=0; });
@@ -356,6 +441,7 @@ function pollServer(){
           if(TRIP_META.appliedIds.indexOf(op.id) === -1){
             applyOp(S, op);
             TRIP_META.appliedIds.push(op.id);
+            pushHistory(TRIP_ID, op);
             appliedCount++;
           }
           if(op.seq > TRIP_META.lastSeq) TRIP_META.lastSeq = op.seq;
@@ -468,6 +554,8 @@ function openTrip(id){
   ME = loadMe(id);
   if(ME && !personById(ME)) ME = null;
   filterText = "";
+  filterCategory = "";
+  TRIP_VIEW = "main";
   lastSyncError = null;
   setScreenTrip();
   renderTrip();
@@ -512,6 +600,16 @@ function copyTripLink(id){
   } else fallback();
 }
 
+function toggleFavorite(id){
+  var list = loadTrips();
+  var idx = -1;
+  for(var i=0;i<list.length;i++){ if(list[i].id === id){ idx = i; break; } }
+  if(idx < 0) return;
+  list[idx].favorite = !list[idx].favorite;
+  saveTrips(list);
+  renderTripList();
+}
+
 function confirmDeleteTrip(id){
   var list = loadTrips();
   var rec = list.filter(function(x){return x.id===id;})[0];
@@ -521,7 +619,7 @@ function confirmDeleteTrip(id){
   m.querySelector("#yes").addEventListener("click", function(){
     var list2 = loadTrips().filter(function(x){return x.id!==id;});
     saveTrips(list2);
-    try{ localStorage.removeItem(LS_QUEUE_PREFIX+id); localStorage.removeItem(LS_ME_PREFIX+id); }catch(e){}
+    try{ localStorage.removeItem(LS_QUEUE_PREFIX+id); localStorage.removeItem(LS_ME_PREFIX+id); localStorage.removeItem(LS_HISTORY_PREFIX+id); }catch(e){}
     m.close();
     renderTripList();
   });
@@ -577,10 +675,14 @@ function renderTripList(){
     h.push('<div class="card"><div class="empty"><b>'+esc(T("trips.empty.title"))+'</b>'+esc(T("trips.empty.hint"))+'</div></div>');
   } else {
     h.push('<div class="card">');
-    list.slice().sort(function(a,b){ return (b.touched||0)-(a.touched||0); }).forEach(function(rec){
+    list.slice().sort(function(a,b){
+      var fa = a.favorite?1:0, fb = b.favorite?1:0;
+      if(fa !== fb) return fb-fa;
+      return (b.touched||0)-(a.touched||0);
+    }).forEach(function(rec){
       var n = (rec.state && rec.state.expenses) ? rec.state.expenses.length : 0;
       h.push('<div class="tripcard">');
-      h.push('<div class="tripcard-name">'+esc(rec.name||T("trips.untitled"))+(rec.localOnly?'<span class="badge">'+esc(T("trips.card.localBadge"))+'</span>':'')+'</div>');
+      h.push('<div class="tripcard-name"><button type="button" class="fav-star'+(rec.favorite?' on':'')+'" data-act="favtoggle" data-id="'+esc(rec.id)+'" aria-label="'+esc(rec.favorite?T("trips.favorite.remove"):T("trips.favorite.add"))+'" title="'+esc(rec.favorite?T("trips.favorite.remove"):T("trips.favorite.add"))+'">'+(rec.favorite?"★":"☆")+'</button> '+esc(rec.name||T("trips.untitled"))+(rec.localOnly?'<span class="badge">'+esc(T("trips.card.localBadge"))+'</span>':'')+'</div>');
       h.push('<div class="tripcard-meta">'+esc(TP("trips.card.expensesCount", n))+' · '+esc(T("trips.card.base",{code:rec.base}))+'</div>');
       h.push('<div class="tripcard-acts">');
       h.push('<button class="btn btn-sm" data-act="open" data-id="'+esc(rec.id)+'">'+esc(T("trips.open"))+'</button>');
@@ -632,6 +734,52 @@ function howtoHTML(){
     '<div class="howto"><b>'+esc(T("howto.android.title"))+'</b><ol><li>'+esc(T("howto.android.1"))+'</li><li>'+esc(T("howto.android.2"))+'</li><li>'+esc(T("howto.android.3"))+'</li></ol></div>';
 }
 
+/* ========== экран: история действий (витрина по ts.history.<tripId>, см. SPEC.md) ========== */
+function historyTimeLabel(ts){
+  if(!ts) return "";
+  var d = new Date(ts);
+  if(isNaN(d.getTime())) return "";
+  var hh = ("0"+d.getHours()).slice(-2), mm = ("0"+d.getMinutes()).slice(-2);
+  return d.getDate()+" "+T("date.month."+d.getMonth())+", "+hh+":"+mm;
+}
+function historyPhrase(entry){
+  var p = entry.payload || {};
+  var author = entry.author || T("author.guest");
+  switch(entry.kind){
+    case "trip.meta":
+      if(p.name && p.base) return T("history.trip.meta.both", {author:author, name:p.name, base:p.base});
+      if(p.name) return T("history.trip.meta.name", {author:author, name:p.name});
+      if(p.base) return T("history.trip.meta.base", {author:author, base:p.base});
+      return T("history.trip.meta.generic", {author:author});
+    case "person.add": return T("history.person.add", {author:author, name:p.name||""});
+    case "person.rename": return T("history.person.rename", {author:author, name:p.name||""});
+    case "person.del": return T("history.person.del", {author:author});
+    case "cur.set": return T("history.cur.set", {author:author, code:p.code||""});
+    case "cur.del": return T("history.cur.del", {author:author, code:p.code||""});
+    case "expense.add": return T("history.expense.add", {author:author, title:p.title||T("expenses.noTitle"), amount:moneyRaw(Number(p.amount)||0, (p.cur||"USD").toUpperCase())});
+    case "expense.edit": return T("history.expense.edit", {author:author, title:p.title||T("expenses.noTitle")});
+    case "expense.del": return T("history.expense.del", {author:author});
+    case "payment.add": return T("history.payment.add", {author:author, amount:money(Math.round((Number(p.amount)||0)*100))});
+    case "payment.del": return T("history.payment.del", {author:author});
+    default: return T("history.unknown", {author:author});
+  }
+}
+function renderHistorySection(){
+  var h = [];
+  h.push('<section><div class="eyebrow">'+esc(T("section.history.title"))+'</div><div class="card">');
+  var list = loadHistory(TRIP_ID).slice().sort(function(a,b){ return (b.seq||0)-(a.seq||0); });
+  if(!list.length){
+    h.push('<div class="empty"><b>'+esc(T("history.empty.title"))+'</b>'+esc(T("history.empty.hint"))+'</div>');
+  } else {
+    list.forEach(function(entry){
+      h.push('<div class="list-line"><div style="flex:1">'+esc(historyPhrase(entry))+
+        '<div class="tiny muted">'+esc(historyTimeLabel(entry.ts))+'</div></div></div>');
+    });
+  }
+  h.push("</div></section>");
+  return h.join("");
+}
+
 function renderTrip(){
   tryAutoMe();
   var c = compute();
@@ -654,8 +802,21 @@ function renderTrip(){
     return;
   }
   var fabEl = document.getElementById("fab");
-  fabEl.hidden = false;
+  fabEl.hidden = (TRIP_VIEW === "history");
   fabEl.textContent = T("fab.addExpense");
+
+  h.push('<div class="chips tabbar">'+
+    chipHTML("radio","tripview","tv-main-main","main",TRIP_VIEW!=="history",T("nav.overview"),"",' data-act="view"')+
+    chipHTML("radio","tripview","tv-main-history","history",TRIP_VIEW==="history",T("nav.history"),"",' data-act="view"')+
+    '</div>');
+
+  if(TRIP_VIEW === "history"){
+    h.push(renderHistorySection());
+    h.push('<div class="footnote">'+esc(T("footer.version",{date:APP_VERSION_DATE}))+'</div>');
+    app.innerHTML = h.join("");
+    updateStatus();
+    return;
+  }
 
   var perPerson = S.people.length ? Math.round(c.total/S.people.length) : 0;
   h.push("<section>");
@@ -702,13 +863,21 @@ function renderTrip(){
   h.push('<section><div class="eyebrow">'+esc(T("section.expenses.title"))+'<span class="sp"></span></div><div class="card">');
   h.push('<div class="filterbar"><input class="inp" id="filter" placeholder="'+esc(T("expenses.filterPlaceholder"))+'" value="'+esc(filterText)+'">'+
          '<button class="btn btn-sm" data-act="copy">'+esc(T("expenses.copySummary"))+'</button></div>');
+  h.push('<div class="filterbar chips">'+
+    chipHTML("radio","expcatfilter","ecf-all","",!filterCategory,T("expenses.filterCategoryAll"),"soft",' data-act="catfilter"')+
+    CATS.map(function(c){ return chipHTML("radio","expcatfilter","ecf-"+c,c,filterCategory===c,CAT_ICON[c]+" "+T("category."+c),"soft",' data-act="catfilter"'); }).join("")+
+    '</div>');
   var list = S.expenses.slice().sort(function(a,b){ if(a.date===b.date) return (b.ts||0)-(a.ts||0); return (a.date<b.date)?1:-1; });
   if(filterText){
     var q = filterText.toLowerCase();
     list = list.filter(function(e){ return (e.title||"").toLowerCase().indexOf(q)>=0 || nameOf(e.payer).toLowerCase().indexOf(q)>=0; });
   }
+  if(filterCategory){
+    list = list.filter(function(e){ return e.category === filterCategory; });
+  }
+  var hasFilter = !!filterText || !!filterCategory;
   if(!list.length){
-    h.push('<div class="empty"><b>'+esc(filterText?T("expenses.emptyFiltered.title"):T("expenses.empty.title"))+'</b>'+esc(filterText?T("expenses.emptyFiltered.hint"):T("expenses.empty.hint"))+'</div>');
+    h.push('<div class="empty"><b>'+esc(hasFilter?T("expenses.emptyFiltered.title"):T("expenses.empty.title"))+'</b>'+esc(hasFilter?T("expenses.emptyFiltered.hint"):T("expenses.empty.hint"))+'</div>');
   } else {
     var lastDay = null;
     list.forEach(function(e){
@@ -716,10 +885,10 @@ function renderTrip(){
       var cents = toCents(e.amount, e.cur);
       var parts = (e.parts||[]).filter(function(id){return personById(id);});
       var forWho = parts.length === S.people.length ? T("expenses.for.all") : parts.map(function(id){return nameOf(id);}).join(", ");
+      var metaKey = e.shares ? (e.note ? "expenses.metaSharesNote" : "expenses.metaShares") : (e.note ? "expenses.metaNote" : "expenses.meta");
       var perShareTxt = money(parts.length ? Math.round(cents/parts.length) : 0);
-      var metaKey = e.note ? "expenses.metaNote" : "expenses.meta";
       h.push('<div class="exp">');
-      h.push('<div class="exp-main"><div class="exp-title">'+esc(e.title || T("expenses.noTitle"))+'</div>');
+      h.push('<div class="exp-main"><div class="exp-title">'+esc(e.title || T("expenses.noTitle"))+(e.category?' <span class="catbadge">'+esc(CAT_ICON[e.category]||"")+" "+esc(T("category."+e.category))+'</span>':'')+'</div>');
       h.push('<div class="exp-meta">'+esc(T(metaKey, {payer: nameOf(e.payer), forWhom: forWho, perShare: perShareTxt, note: e.note||""}))+'</div></div>');
       h.push('<div class="exp-right"><div class="exp-amt num">'+moneyRaw(e.amount, e.cur)+'</div>');
       if(e.cur !== baseCode()) h.push('<div class="exp-conv num">'+money(cents)+'</div>');
@@ -875,6 +1044,7 @@ app.addEventListener("click", function(ev){
     case "open": location.hash = "#t=" + encodeURIComponent(id); break;
     case "copylink": copyTripLink(id); break;
     case "deltrip": confirmDeleteTrip(id); break;
+    case "favtoggle": toggleFavorite(id); break;
     case "people": openPeople(); break;
     case "addperson": addPersonInline(); break;
     case "delperson": removePerson(id); break;
@@ -903,6 +1073,12 @@ app.addEventListener("change", function(ev){
     else { toast(T("settings.currencies.rateInvalid")); renderTrip(); }
   } else if(act === "me"){
     setMe(t.value || null);
+  } else if(act === "catfilter"){
+    filterCategory = t.value || "";
+    renderTrip();
+  } else if(act === "view"){
+    TRIP_VIEW = t.value || "main";
+    renderTrip();
   }
 });
 
@@ -966,9 +1142,14 @@ function openExpense(id){
     id: uid(), title:"", amount:"", cur: baseCode(),
     payer: (ME || (S.people[0] && S.people[0].id) || ""),
     parts: S.people.map(function(p){return p.id;}),
-    date: todayISO(), note:""
+    date: todayISO(), note:"", category:""
   };
   if(!draft.parts.length) draft.parts = S.people.map(function(p){return p.id;});
+
+  // черновик ручных долей: {pid: "строка суммы"}, живёт только внутри модалки
+  var sharesDraft = {};
+  if(draft.shares){ Object.keys(draft.shares).forEach(function(k){ sharesDraft[k] = String(draft.shares[k]); }); }
+  var initialMode = draft.shares ? "manual" : "even";
 
   var mu = uid().replace(/[^a-z0-9]/gi,"");
   var body = [];
@@ -977,6 +1158,10 @@ function openExpense(id){
     '<select class="inp" id="mCur-'+mu+'">'+S.currencies.map(function(c){return '<option value="'+esc(c.code)+'"'+(c.code===draft.cur?' selected':'')+'>'+esc(c.code)+'</option>';}).join("")+'</select>'+
     '</div><div class="hint" id="mConv-'+mu+'"></div></div>');
   body.push('<div class="field"><label for="mTitle-'+mu+'">'+esc(T("expenseModal.titleLabel"))+'</label><input class="inp" id="mTitle-'+mu+'" placeholder="'+esc(T("expenseModal.titlePlaceholder"))+'" value="'+esc(draft.title)+'"></div>');
+  body.push('<div class="field"><label>'+esc(T("expenseModal.categoryLabel"))+'</label><div class="chips" id="mCat-'+mu+'">'+
+    chipHTML("radio","cat-"+mu,"cat-"+mu+"-none","",!draft.category,T("expenseModal.categoryNone"),"soft")+
+    CATS.map(function(c){ return chipHTML("radio","cat-"+mu,"cat-"+mu+"-"+c,c,draft.category===c,CAT_ICON[c]+" "+T("category."+c),"soft"); }).join("")+
+    '</div></div>');
   body.push('<div class="field"><label>'+esc(T("expenseModal.payerLabel"))+'</label><div class="chips" id="mPayer-'+mu+'">'+
     S.people.map(function(p){ return chipHTML("radio","payer-"+mu,"payer-"+mu+"-"+p.id,p.id,draft.payer===p.id,p.name,""); }).join("")+'</div></div>');
   body.push('<div class="field"><label>'+esc(T("expenseModal.partsLabel"))+'</label><div class="chips" id="mParts-'+mu+'">'+
@@ -986,6 +1171,15 @@ function openExpense(id){
     '<button type="button" class="btn btn-sm" id="mAddP-'+mu+'">'+esc(T("expenseModal.addPerson"))+'</button>'+
     '<span class="hint" id="mPer-'+mu+'"></span></div>'+
     '<div class="row" id="mNewWrap-'+mu+'" style="margin-top:8px; gap:8px" hidden><input class="inp" id="mNewP-'+mu+'" placeholder="'+esc(T("expenseModal.newPersonPlaceholder"))+'" autocomplete="off"><button type="button" class="btn btn-primary btn-sm" id="mNewOk-'+mu+'">'+esc(T("expenseModal.addPersonOk"))+'</button></div></div>');
+  body.push('<div class="field"><label>'+esc(T("expenseModal.splitLabel"))+'</label><div class="chips" id="mSplitMode-'+mu+'">'+
+    chipHTML("radio","splitmode-"+mu,"sm-"+mu+"-even","even",initialMode!=="manual",T("expenseModal.splitEven"),"soft")+
+    chipHTML("radio","splitmode-"+mu,"sm-"+mu+"-manual","manual",initialMode==="manual",T("expenseModal.splitManual"),"soft")+
+    '</div>'+
+    '<div id="mSharesWrap-'+mu+'"'+(initialMode==="manual"?"":" hidden")+' style="display:flex; flex-direction:column; gap:2px; margin-top:8px"></div>'+
+    '<div class="row" style="margin-top:6px; flex-wrap:wrap; align-items:center; gap:10px">'+
+    '<span class="hint" id="mSharesStatus-'+mu+'"></span>'+
+    '<button type="button" class="btn btn-sm" id="mSharesFill-'+mu+'" hidden>'+esc(T("expenseModal.sharesAutoFill"))+'</button>'+
+    '</div></div>');
   body.push('<div class="grid2"><div class="field"><label for="mDate-'+mu+'">'+esc(T("expenseModal.dateLabel"))+'</label><input class="inp" id="mDate-'+mu+'" type="date" value="'+esc(draft.date)+'"></div>'+
     '<div class="field"><label for="mNote-'+mu+'">'+esc(T("expenseModal.noteLabel"))+'</label><input class="inp" id="mNote-'+mu+'" placeholder="'+esc(T("expenseModal.notePlaceholder"))+'" value="'+esc(draft.note||"")+'"></div></div>');
 
@@ -996,6 +1190,60 @@ function openExpense(id){
   var m = modal(isNew ? T("expenseModal.new.title") : T("expenseModal.edit.title"), body.join(""), foot);
   var amt = m.querySelector("#mAmt-"+mu);
   var cur = m.querySelector("#mCur-"+mu);
+  var saveBtn = m.querySelector("#mSave-"+mu);
+
+  function currentParts(){
+    return Array.prototype.map.call(m.querySelectorAll("#mParts-"+mu+" input:checked"), function(x){return x.value;});
+  }
+  function splitMode(){
+    var el = m.querySelector("input[name='splitmode-"+mu+"']:checked");
+    return el ? el.value : "even";
+  }
+  function unitFor(code){ return NO_DEC[code] ? 1 : 100; }
+
+  function renderShareRows(){
+    var wrap = m.querySelector("#mSharesWrap-"+mu);
+    var parts = currentParts();
+    wrap.innerHTML = parts.map(function(pid){
+      var val = sharesDraft.hasOwnProperty(pid) ? sharesDraft[pid] : "";
+      return '<div class="row" style="gap:8px"><span style="flex:1">'+esc(nameOf(pid))+'</span>'+
+        '<input class="inp num" style="max-width:120px" data-share="'+esc(pid)+'" inputmode="decimal" value="'+esc(val)+'"></div>';
+    }).join("");
+    Array.prototype.forEach.call(wrap.querySelectorAll("[data-share]"), function(inp){
+      inp.addEventListener("input", function(){
+        sharesDraft[inp.getAttribute("data-share")] = inp.value;
+        refreshShareStatus();
+      });
+    });
+  }
+
+  function refreshShareStatus(){
+    var statusEl = m.querySelector("#mSharesStatus-"+mu);
+    var fillBtn = m.querySelector("#mSharesFill-"+mu);
+    if(splitMode() !== "manual"){ statusEl.textContent = ""; fillBtn.hidden = true; saveBtn.disabled = false; return; }
+    var a = parseAmount(amt.value);
+    var code = cur.value;
+    var parts = currentParts();
+    if(!isFinite(a) || !parts.length){ statusEl.textContent = ""; fillBtn.hidden = true; saveBtn.disabled = false; return; }
+    var unit = unitFor(code);
+    var target = Math.round(a*unit);
+    var sum = 0;
+    parts.forEach(function(pid){ var v = parseAmount(sharesDraft[pid]); sum += Math.round((isFinite(v)?v:0)*unit); });
+    var diff = target - sum;
+    if(diff === 0){
+      statusEl.textContent = T("expenseModal.sharesOk");
+      statusEl.className = "hint";
+      fillBtn.hidden = true;
+      saveBtn.disabled = false;
+    } else {
+      statusEl.textContent = diff > 0
+        ? T("expenseModal.sharesRemain", {amount: moneyRaw(diff/unit, code)})
+        : T("expenseModal.sharesOver", {amount: moneyRaw(-diff/unit, code)});
+      statusEl.className = "hint";
+      fillBtn.hidden = false;
+      saveBtn.disabled = true;
+    }
+  }
 
   function refresh(){
     var a = parseAmount(amt.value);
@@ -1005,10 +1253,32 @@ function openExpense(id){
     else conv.textContent = code === baseCode() ? T("expenseModal.convBase") : "";
     var n = m.querySelectorAll("#mParts-"+mu+" input:checked").length;
     m.querySelector("#mPer-"+mu).textContent = (isFinite(a) && n) ? T("expenseModal.perShare", {amount: money(Math.round(toCents(a,code)/n))}) : "";
+    refreshShareStatus();
   }
   amt.addEventListener("input", refresh);
-  cur.addEventListener("change", refresh);
-  m.querySelector("#mParts-"+mu).addEventListener("change", refresh);
+  cur.addEventListener("change", function(){ sharesDraft = {}; refresh(); if(splitMode()==="manual") renderShareRows(); });
+  m.querySelector("#mParts-"+mu).addEventListener("change", function(){ if(splitMode()==="manual") renderShareRows(); refresh(); });
+  m.querySelector("#mSplitMode-"+mu).addEventListener("change", function(){
+    var manual = splitMode() === "manual";
+    m.querySelector("#mSharesWrap-"+mu).hidden = !manual;
+    if(manual) renderShareRows();
+    refreshShareStatus();
+  });
+  m.querySelector("#mSharesFill-"+mu).addEventListener("click", function(){
+    var parts = currentParts();
+    if(!parts.length) return;
+    var a = parseAmount(amt.value);
+    if(!isFinite(a)) return;
+    var code = cur.value, unit = unitFor(code);
+    var target = Math.round(a*unit);
+    var last = parts[parts.length-1];
+    var sumOthers = 0;
+    parts.forEach(function(pid){ if(pid===last) return; var v = parseAmount(sharesDraft[pid]); sumOthers += Math.round((isFinite(v)?v:0)*unit); });
+    var remain = target - sumOthers;
+    sharesDraft[last] = (remain/unit).toFixed(NO_DEC[code]?0:2);
+    renderShareRows();
+    refreshShareStatus();
+  });
 
   function addChip(person){
     var tmp = document.createElement("div");
@@ -1027,6 +1297,7 @@ function openExpense(id){
     addChip(person);
     inp.value = "";
     m.querySelector("#mNewWrap-"+mu).hidden = true;
+    if(splitMode()==="manual") renderShareRows();
     refresh();
     toast(T("expenseModal.personAdded", {name: name}));
   }
@@ -1037,26 +1308,42 @@ function openExpense(id){
   });
   m.querySelector("#mNewOk-"+mu).addEventListener("click", commitNewPerson);
   m.querySelector("#mNewP-"+mu).addEventListener("keydown", function(e){ if(e.key === "Enter"){ e.preventDefault(); commitNewPerson(); } });
-  m.querySelector("#mAll-"+mu).addEventListener("click", function(){ m.querySelectorAll("#mParts-"+mu+" input").forEach(function(x){x.checked=true;}); refresh(); });
-  m.querySelector("#mNone-"+mu).addEventListener("click", function(){ m.querySelectorAll("#mParts-"+mu+" input").forEach(function(x){x.checked=false;}); refresh(); });
+  m.querySelector("#mAll-"+mu).addEventListener("click", function(){ m.querySelectorAll("#mParts-"+mu+" input").forEach(function(x){x.checked=true;}); if(splitMode()==="manual") renderShareRows(); refresh(); });
+  m.querySelector("#mNone-"+mu).addEventListener("click", function(){ m.querySelectorAll("#mParts-"+mu+" input").forEach(function(x){x.checked=false;}); if(splitMode()==="manual") renderShareRows(); refresh(); });
   if(!isNew) m.querySelector("#mDel-"+mu).addEventListener("click", function(){ m.close(); confirmDeleteExpense(draft.id); });
   m.querySelector("#mSave-"+mu).addEventListener("click", function(){
     var a = parseAmount(amt.value);
     if(!isFinite(a) || a<=0){ toast(T("expenseModal.amountRequired")); amt.focus(); return; }
     var payerEl = m.querySelector("#mPayer-"+mu+" input:checked");
     if(!payerEl){ toast(T("expenseModal.payerRequired")); return; }
-    var parts = Array.prototype.map.call(m.querySelectorAll("#mParts-"+mu+" input:checked"), function(x){return x.value;});
+    var parts = currentParts();
     if(!parts.length){ toast(T("expenseModal.partsRequired")); return; }
+    var catEl = m.querySelector("#mCat-"+mu+" input:checked");
     var payload = {
       eid: draft.id, title: m.querySelector("#mTitle-"+mu).value.trim(),
       amount: a, cur: cur.value, payer: payerEl.value, parts: parts,
       date: m.querySelector("#mDate-"+mu).value || todayISO(),
       note: m.querySelector("#mNote-"+mu).value.trim()
     };
+    if(catEl && catEl.value) payload.category = catEl.value;
+    if(splitMode() === "manual"){
+      var code = cur.value, unit = unitFor(code);
+      var target = Math.round(a*unit);
+      var sharesObj = {}, sum = 0;
+      parts.forEach(function(pid){
+        var v = parseAmount(sharesDraft[pid]);
+        v = isFinite(v) ? v : 0;
+        sum += Math.round(v*unit);
+        if(v > 0) sharesObj[pid] = v;
+      });
+      if(sum !== target){ toast(T("expenseModal.sharesInvalid")); return; }
+      payload.shares = sharesObj;
+    }
     commit(isNew ? "expense.add" : "expense.edit", payload);
     m.close();
   });
   refresh();
+  if(initialMode === "manual") renderShareRows();
   setTimeout(function(){ amt.focus(); }, 60);
 }
 
