@@ -734,6 +734,15 @@ function howtoHTML(){
     '<div class="howto"><b>'+esc(T("howto.android.title"))+'</b><ol><li>'+esc(T("howto.android.1"))+'</li><li>'+esc(T("howto.android.2"))+'</li><li>'+esc(T("howto.android.3"))+'</li></ol></div>';
 }
 
+function privacyHTML(){
+  return '<div class="howto"><b>'+esc(T("privacy.title"))+'</b><ol>'+
+    '<li>'+esc(T("privacy.1"))+'</li>'+
+    '<li>'+esc(T("privacy.2"))+'</li>'+
+    '<li>'+esc(T("privacy.3"))+'</li>'+
+    '<li>'+esc(T("privacy.4"))+'</li>'+
+    '</ol><div class="hint" style="margin-top:6px">'+esc(T("privacy.note"))+'</div></div>';
+}
+
 /* ========== экран: история действий (витрина по ts.history.<tripId>, см. SPEC.md) ========== */
 function historyTimeLabel(ts){
   if(!ts) return "";
@@ -932,6 +941,8 @@ function renderTrip(){
   h.push("</details>");
 
   h.push('<details class="setup"><summary>'+esc(T("settings.howto.summary"))+'</summary>'+howtoHTML()+'</details>');
+
+  h.push('<details class="setup"><summary>'+esc(T("settings.privacy.summary"))+'</summary>'+privacyHTML()+'</details>');
 
   h.push('<details class="setup"><summary>'+esc(T("settings.me.summary"))+'</summary><div class="pad"><div class="chips">');
   h.push(chipHTML("radio","me","me-none","", !ME, T("settings.me.clear"), "soft", ' data-act="me"'));

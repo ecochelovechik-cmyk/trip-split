@@ -158,6 +158,7 @@ window.I18N = {
     "settings.me.clear": "Не выбрано",
     "settings.me.hint": "Выбор хранится только на вашем устройстве — подсвечивает ваши долги.",
     "settings.howto.summary": "Открыть как приложение на телефоне",
+    "settings.privacy.summary": "Ограничить доступ группой в Telegram",
 
     "howto.ios.title": "iPhone — Safari",
     "howto.ios.1": "Откройте эту ссылку в Safari.",
@@ -168,6 +169,12 @@ window.I18N = {
     "howto.android.2": "Меню «⋮» справа вверху → «Добавить на главный экран».",
     "howto.android.3": "Иконка появится рядом с остальными приложениями.",
     "howto.invite": "Ссылку на поездку можно отправить попутчикам — «Скопировать ссылку» в списке поездок.",
+    "privacy.title": "Чтобы поездку видели только свои",
+    "privacy.1": "Создайте в Telegram группу с попутчиками.",
+    "privacy.2": "Добавьте в неё бота @kkd_trip_bot.",
+    "privacy.3": "Скопируйте ссылку на эту поездку и отправьте в группе: /privyazat и ссылка.",
+    "privacy.4": "Готово — «итог» и кнопка «Открыть поездку» в этой группе теперь ведут сюда.",
+    "privacy.note": "Сама ссылка остаётся ключом доступа — если её переслать вне группы, по ней тоже можно зайти.",
 
     "footer.note": "Итог считается в {base} по вашим курсам.",
     "footer.version": "Версия от {date}",
@@ -394,6 +401,7 @@ window.I18N = {
     "settings.me.clear": "Tanlanmagan",
     "settings.me.hint": "Tanlov faqat sizning qurilmangizda saqlanadi — qarzlaringizni ajratib ko'rsatadi.",
     "settings.howto.summary": "Telefonda ilova sifatida ochish",
+    "settings.privacy.summary": "Telegram guruhi orqali kirishni cheklash",
 
     "howto.ios.title": "iPhone — Safari",
     "howto.ios.1": "Bu havolani Safari'da oching.",
@@ -404,6 +412,12 @@ window.I18N = {
     "howto.android.2": "Yuqori o'ngdagi «⋮» menyu → «Bosh ekranga qo'shish».",
     "howto.android.3": "Belgi boshqa ilovalar qatorida paydo bo'ladi.",
     "howto.invite": "Sayohat havolasini hamrohlaringizga yuborishingiz mumkin — sayohatlar ro'yxatida «Havolani nusxalash».",
+    "privacy.title": "Sayohatni faqat o'zingiznikilar ko'rishi uchun",
+    "privacy.1": "Telegram'da hamrohlaringiz bilan guruh yarating.",
+    "privacy.2": "Guruhga @kkd_trip_bot botini qo'shing.",
+    "privacy.3": "Shu sayohat havolasini nusxalab, guruhda yuboring: /privyazat va havola.",
+    "privacy.4": "Tayyor — shu guruhda «itog» va «Sayohatni ochish» tugmasi endi shu sayohatga olib boradi.",
+    "privacy.note": "Havolaning o'zi kirish kaliti bo'lib qoladi — uni guruhdan tashqarida yuborsangiz, u orqali ham kirish mumkin.",
 
     "footer.note": "Yakun sizning kurslaringiz bo'yicha {base} da hisoblanadi.",
     "footer.version": "{date} versiyasi",
@@ -630,6 +644,7 @@ window.I18N = {
     "settings.me.clear": "Not selected",
     "settings.me.hint": "The choice is saved only on your device — it highlights your debts.",
     "settings.howto.summary": "Open as an app on your phone",
+    "settings.privacy.summary": "Restrict access to a Telegram group",
 
     "howto.ios.title": "iPhone — Safari",
     "howto.ios.1": "Open this link in Safari.",
@@ -640,6 +655,12 @@ window.I18N = {
     "howto.android.2": "Menu \"⋮\" in the top right → \"Add to Home screen.\"",
     "howto.android.3": "The icon will appear alongside your other apps.",
     "howto.invite": "You can send the trip link to your travel companions — \"Copy link\" in the trip list.",
+    "privacy.title": "So only your group can see this trip",
+    "privacy.1": "Create a Telegram group with your travel companions.",
+    "privacy.2": "Add the bot @kkd_trip_bot to that group.",
+    "privacy.3": "Copy this trip's link and send it in the group: /privyazat and the link.",
+    "privacy.4": "Done — in that group, \"итог\" and the \"Open trip\" button now point here.",
+    "privacy.note": "The link itself is still the access key — if you forward it outside the group, it still works.",
 
     "footer.note": "The total is calculated in {base} using your rates.",
     "footer.version": "Version from {date}",

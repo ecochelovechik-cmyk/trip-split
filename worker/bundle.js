@@ -499,6 +499,7 @@ async function cmdStart(env, chatId) {
     "«итог» или /itog — кто кому сколько должен прямо сейчас",
     "/privyazat &lt;ссылка или id поездки&gt; — привязать этот чат к поездке",
     "/otvyazat — отвязать чат от поездки",
+    "/help — как завести новую поездку и открыть её только своим",
     "",
     "Раз в день вечером, если были новые траты, я сам пришлю сводку.",
     trip ? `Этот чат сейчас привязан к поездке «${esc(trip.title || "")}».` : "Этот чат пока ни к одной поездке не привязан."
@@ -506,6 +507,25 @@ async function cmdStart(env, chatId) {
 
   const keyboard = { inline_keyboard: [[{ text: "Открыть поездку", web_app: { url } }]] };
   return sendMessage(env.BOT_TOKEN, chatId, text, { reply_markup: keyboard });
+}
+
+async function cmdHelp(env, chatId) {
+  const text = [
+    "<b>Новая поездка — коротко</b>",
+    "",
+    `1. Откройте сайт: ${esc(tripLinkFor(env, null))}`,
+    "2. Создайте поездку, дайте ей название.",
+    "",
+    "<b>Чтобы её видели только свои, а не все, у кого есть ссылка:</b>",
+    "1. Создайте в Telegram группу с попутчиками.",
+    "2. Добавьте туда меня (бота) — Добавить участника → мой username.",
+    "3. Скопируйте ссылку на поездку с сайта и отправьте в этой группе:",
+    "<code>/privyazat &lt;ссылка&gt;</code>",
+    "4. Готово — «итог» и кнопка «Открыть поездку» в этой группе теперь ведут на неё. Кто не в группе — у того нет ни бота с привязкой, ни ссылки.",
+    "",
+    "Сама ссылка всё равно остаётся ключом доступа — если её переслать вне группы, по ней тоже можно зайти."
+  ].join("\n");
+  return sendMessage(env.BOT_TOKEN, chatId, text);
 }
 
 async function cmdItog(env, chatId) {
@@ -593,6 +613,8 @@ async function handleTelegramWebhook(request, env, url) {
       await cmdItog(env, chatId);
     } else if (lower === "/start" || lower.startsWith("/start@") || lower.startsWith("/start ")) {
       await cmdStart(env, chatId);
+    } else if (lower === "/help" || lower.startsWith("/help@") || lower.startsWith("/help ")) {
+      await cmdHelp(env, chatId);
     } else if (lower.startsWith("/privyazat")) {
       const arg = raw.replace(/^\/privyazat(@\S+)?\s*/i, "");
       await cmdPrivyazat(env, chatId, arg, chatTitle);
