@@ -20,8 +20,15 @@ var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
 // UZS/KGS без общепринятого юникод-символа — показываем код валюты (не зависит от языка интерфейса)
-var SYM = {USD:"$",EUR:"€",RUB:"₽",GBP:"£",JPY:"¥",CNY:"¥",TRY:"₺",KZT:"₸",THB:"฿",AED:"AED",GEL:"₾",INR:"₹",VND:"₫",KRW:"₩",AZN:"₼",AMD:"֏",PLN:"zł",ILS:"₪",EGP:"E£",MYR:"RM",IDR:"Rp"};
-var POPULAR = ["USD","EUR","RUB","UZS","KZT","KGS","TRY","AED","THB","CNY","GEL","GBP","JPY","VND","EGP","AZN","AMD","INR","MYR","IDR","PLN","ILS"];
+var SYM = {USD:"$",EUR:"€",RUB:"₽",GBP:"£",JPY:"¥",CNY:"¥",TRY:"₺",KZT:"₸",THB:"฿",AED:"AED",GEL:"₾",INR:"₹",VND:"₫",KRW:"₩",AZN:"₼",AMD:"֏",PLN:"zł",ILS:"₪",EGP:"E£",MYR:"RM",IDR:"Rp",
+  SGD:"S$",HKD:"HK$",TWD:"NT$",PHP:"₱",CHF:"CHF",CAD:"C$",AUD:"A$",NZD:"NZ$",CZK:"Kč",HUF:"Ft",
+  UAH:"₴",MNT:"₮",NPR:"₨",LKR:"₨",PKR:"₨",BDT:"৳",KHR:"៛",LAK:"₭",ZAR:"R",BRL:"R$",SAR:"﷼",QAR:"﷼"};
+// Частые направления — вверху списка; остальные ниже по алфавиту.
+var POPULAR = ["USD","EUR","RUB","UZS","KRW","CNY","KZT","KGS","TRY","AED","THB","GEL"];
+var CURRENCIES_MORE = ["AMD","ARS","AUD","AZN","BDT","BGN","BHD","BRL","BYN","CAD","CHF","CLP","COP","CZK",
+  "DKK","EGP","GBP","HKD","HUF","IDR","ILS","INR","IQD","JOD","JPY","KHR","KWD","LAK","LKR","MAD","MDL",
+  "MNT","MXN","MYR","NOK","NPR","NZD","OMR","PEN","PHP","PKR","PLN","QAR","RON","RSD","SAR","SEK","SGD",
+  "TJS","TND","TWD","UAH","VND","ZAR"];
 
 var app = document.getElementById("app");
 
@@ -934,7 +941,26 @@ function renderTrip(){
     }
     h.push("</div>");
   });
-  h.push('<div class="inline-form"><input class="inp" id="newCur" placeholder="'+esc(T("settings.currencies.codePlaceholder"))+'" maxlength="6" style="max-width:190px"><input class="inp num" id="newRate" placeholder="'+esc(T("settings.currencies.ratePlaceholder",{base:baseCode()}))+'" inputmode="decimal" style="max-width:190px"><button class="btn btn-sm" data-act="addcur">'+esc(T("settings.currencies.add"))+'</button></div>');
+  // Выбор валюты списком: код руками вводить не нужно (но «Другая» оставлена на всякий случай).
+  var haveCur = {};
+  S.currencies.forEach(function(c){ haveCur[c.code] = 1; });
+  function curOption(code){
+    var sym = SYM[code] && SYM[code] !== code ? " " + SYM[code] : "";
+    return '<option value="'+esc(code)+'">'+esc(code + sym)+'</option>';
+  }
+  var topList = POPULAR.filter(function(c){ return !haveCur[c]; });
+  var restList = CURRENCIES_MORE.filter(function(c){ return !haveCur[c]; });
+  h.push('<div class="inline-form">'+
+    '<select class="inp" id="newCurSel" style="max-width:190px">'+
+      '<option value="">'+esc(T("settings.currencies.pick"))+'</option>'+
+      (topList.length ? '<optgroup label="'+esc(T("settings.currencies.groupCommon"))+'">'+topList.map(curOption).join("")+'</optgroup>' : '')+
+      (restList.length ? '<optgroup label="'+esc(T("settings.currencies.groupAll"))+'">'+restList.map(curOption).join("")+'</optgroup>' : '')+
+      '<option value="__other">'+esc(T("settings.currencies.other"))+'</option>'+
+    '</select>'+
+    '<input class="inp" id="newCur" placeholder="'+esc(T("settings.currencies.codePlaceholder"))+'" maxlength="6" style="max-width:120px" hidden>'+
+    '<input class="inp num" id="newRate" placeholder="'+esc(T("settings.currencies.ratePlaceholder",{base:baseCode()}))+'" inputmode="decimal" style="max-width:190px">'+
+    '<button class="btn btn-sm" data-act="addcur">'+esc(T("settings.currencies.add"))+'</button>'+
+    '</div>');
   h.push('<div class="inline-form"><div class="row" style="flex:1; flex-wrap:wrap"><span class="hint">'+esc(T("settings.currencies.baseLabel"))+'</span><select class="inp" id="baseSel" style="max-width:150px">'+
          S.currencies.map(function(c){return '<option value="'+esc(c.code)+'"'+(c.code===baseCode()?' selected':'')+'>'+esc(c.code)+'</option>';}).join("")+
          '</select></div></div>');
@@ -976,6 +1002,14 @@ function bindTripEvents(){
   if(np) np.addEventListener("keydown", function(e){ if(e.key === "Enter") addPersonInline(); });
   var bs = document.getElementById("baseSel");
   if(bs) bs.addEventListener("change", function(){ setBaseCurrency(bs.value); });
+  // «Другая» в списке валют открывает поле для ручного ввода кода
+  var cs = document.getElementById("newCurSel");
+  if(cs) cs.addEventListener("change", function(){
+    var manual = document.getElementById("newCur");
+    if(!manual) return;
+    manual.hidden = (cs.value !== "__other");
+    if(!manual.hidden) manual.focus();
+  });
 }
 
 /* ========== действия: участники ========== */
@@ -1002,9 +1036,13 @@ function setMe(id){
 
 /* ========== действия: валюты ========== */
 function addCurrencyInline(){
+  var selEl = document.getElementById("newCurSel");
   var codeEl = document.getElementById("newCur");
   var rateEl = document.getElementById("newRate");
-  var code = (codeEl.value||"").trim().toUpperCase().replace(/[^A-ZА-Я]/g,"");
+  // код берём из списка; «Другая» — из текстового поля рядом
+  var picked = selEl ? (selEl.value||"") : "";
+  var raw = (picked && picked !== "__other") ? picked : (codeEl.value||"");
+  var code = raw.trim().toUpperCase().replace(/[^A-ZА-Я]/g,"");
   var rate = parseAmount(rateEl.value);
   if(!code){ toast(T("settings.currencies.codeRequired")); return; }
   if(S.currencies.some(function(c){return c.code===code;})){ toast(T("settings.currencies.alreadyExists")); return; }
