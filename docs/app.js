@@ -23,6 +23,25 @@ var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,
 var SYM = {USD:"$",EUR:"€",RUB:"₽",GBP:"£",JPY:"¥",CNY:"¥",TRY:"₺",KZT:"₸",THB:"฿",AED:"AED",GEL:"₾",INR:"₹",VND:"₫",KRW:"₩",AZN:"₼",AMD:"֏",PLN:"zł",ILS:"₪",EGP:"E£",MYR:"RM",IDR:"Rp",
   SGD:"S$",HKD:"HK$",TWD:"NT$",PHP:"₱",CHF:"CHF",CAD:"C$",AUD:"A$",NZD:"NZ$",CZK:"Kč",HUF:"Ft",
   UAH:"₴",MNT:"₮",NPR:"₨",LKR:"₨",PKR:"₨",BDT:"৳",KHR:"៛",LAK:"₭",ZAR:"R",BRL:"R$",SAR:"﷼",QAR:"﷼"};
+// Страна → её валюта. Выбор страны ставит валюту новых трат (как в калькуляторе
+// себестоимости: человек думает «я в Корее», а не «мне нужен код KRW»).
+var COUNTRIES = [
+  {cur:"KRW", flag:"🇰🇷", ru:"Корея"},        {cur:"CNY", flag:"🇨🇳", ru:"Китай"},
+  {cur:"THB", flag:"🇹🇭", ru:"Таиланд"},      {cur:"TRY", flag:"🇹🇷", ru:"Турция"},
+  {cur:"AED", flag:"🇦🇪", ru:"ОАЭ"},          {cur:"UZS", flag:"🇺🇿", ru:"Узбекистан"},
+  {cur:"KZT", flag:"🇰🇿", ru:"Казахстан"},    {cur:"KGS", flag:"🇰🇬", ru:"Киргизия"},
+  {cur:"RUB", flag:"🇷🇺", ru:"Россия"},       {cur:"GEL", flag:"🇬🇪", ru:"Грузия"},
+  {cur:"JPY", flag:"🇯🇵", ru:"Япония"},       {cur:"VND", flag:"🇻🇳", ru:"Вьетнам"},
+  {cur:"IDR", flag:"🇮🇩", ru:"Индонезия"},    {cur:"MYR", flag:"🇲🇾", ru:"Малайзия"},
+  {cur:"SGD", flag:"🇸🇬", ru:"Сингапур"},     {cur:"INR", flag:"🇮🇳", ru:"Индия"},
+  {cur:"EGP", flag:"🇪🇬", ru:"Египет"},       {cur:"AZN", flag:"🇦🇿", ru:"Азербайджан"},
+  {cur:"AMD", flag:"🇦🇲", ru:"Армения"},      {cur:"TJS", flag:"🇹🇯", ru:"Таджикистан"},
+  {cur:"USD", flag:"🇺🇸", ru:"США"},          {cur:"EUR", flag:"🇪🇺", ru:"Еврозона"},
+  {cur:"GBP", flag:"🇬🇧", ru:"Британия"},     {cur:"CHF", flag:"🇨🇭", ru:"Швейцария"},
+  {cur:"PLN", flag:"🇵🇱", ru:"Польша"},       {cur:"CZK", flag:"🇨🇿", ru:"Чехия"},
+  {cur:"ILS", flag:"🇮🇱", ru:"Израиль"},      {cur:"SAR", flag:"🇸🇦", ru:"Саудовская Аравия"},
+  {cur:"HKD", flag:"🇭🇰", ru:"Гонконг"},      {cur:"PHP", flag:"🇵🇭", ru:"Филиппины"}
+];
 // Частые направления — вверху списка; остальные ниже по алфавиту.
 var POPULAR = ["USD","EUR","RUB","UZS","KRW","CNY","KZT","KGS","TRY","AED","THB","GEL"];
 var CURRENCIES_MORE = ["AMD","ARS","AUD","AZN","BDT","BGN","BHD","BRL","BYN","CAD","CHF","CLP","COP","CZK",
@@ -215,6 +234,8 @@ function applyOp(state, op){
         for(var i=0;i<state.currencies.length;i++){ if(state.currencies[i].code === state.trip.base) has = true; }
         if(!has) state.currencies.push({code: state.trip.base, rate:1});
       }
+      // валюта новых трат (страна пребывания); "" — снова считать в базовой
+      if(typeof p.spendCur === "string") state.trip.spendCur = p.spendCur.trim().toUpperCase();
       state.currencies.forEach(function(c){ if(c.code === state.trip.base) c.rate = 1; });
       break;
     case "person.add":
@@ -268,6 +289,17 @@ function applyOp(state, op){
 function personById(id){ return S.people.filter(function(p){return p.id===id;})[0]; }
 function nameOf(id){ var p = personById(id); return p ? p.name : "—"; }
 function baseCode(){ return S.trip.base; }
+// Валюта, в которой сейчас тратим (страна пребывания). Если она пропала из списка
+// валют поездки — молча откатываемся на базовую, чтобы форму траты не заклинило.
+function spendCode(){
+  var c = S.trip.spendCur;
+  if(c && S.currencies.some(function(x){return x.code===c;})) return c;
+  return baseCode();
+}
+function countryOf(code){
+  for(var i=0;i<COUNTRIES.length;i++) if(COUNTRIES[i].cur===code) return COUNTRIES[i];
+  return null;
+}
 function rateOf(code){
   var c = S.currencies.filter(function(x){return x.code===code;})[0];
   return c ? Number(c.rate) || 0 : 0;
@@ -964,6 +996,18 @@ function renderTrip(){
   h.push('<div class="inline-form"><div class="row" style="flex:1; flex-wrap:wrap"><span class="hint">'+esc(T("settings.currencies.baseLabel"))+'</span><select class="inp" id="baseSel" style="max-width:150px">'+
          S.currencies.map(function(c){return '<option value="'+esc(c.code)+'"'+(c.code===baseCode()?' selected':'')+'>'+esc(c.code)+'</option>';}).join("")+
          '</select></div></div>');
+  // «Мы сейчас в …» — задаёт валюту новых трат, чтобы не переключать её каждый раз
+  h.push('<div class="inline-form"><div class="row" style="flex:1; flex-wrap:wrap">'+
+         '<span class="hint">'+esc(T("settings.currencies.spendLabel"))+'</span>'+
+         '<select class="inp" id="spendSel" style="max-width:230px">'+
+           '<option value="">'+esc(T("settings.currencies.spendBase",{base:baseCode()}))+'</option>'+
+           COUNTRIES.filter(function(c){ return S.currencies.some(function(x){return x.code===c.cur;}); })
+             .map(function(c){
+               return '<option value="'+esc(c.cur)+'"'+(S.trip.spendCur===c.cur?" selected":"")+'>'+
+                      esc(c.flag+" "+c.ru+" — "+c.cur)+'</option>';
+             }).join("")+
+         '</select></div>'+
+         '<div class="hint" style="flex-basis:100%">'+esc(T("settings.currencies.spendHint"))+'</div></div>');
   h.push("</details>");
 
   h.push('<details class="setup"><summary>'+esc(T("settings.howto.summary"))+'</summary>'+howtoHTML()+'</details>');
@@ -1002,6 +1046,8 @@ function bindTripEvents(){
   if(np) np.addEventListener("keydown", function(e){ if(e.key === "Enter") addPersonInline(); });
   var bs = document.getElementById("baseSel");
   if(bs) bs.addEventListener("change", function(){ setBaseCurrency(bs.value); });
+  var sp = document.getElementById("spendSel");
+  if(sp) sp.addEventListener("change", function(){ commit("trip.meta", {spendCur: sp.value}); });
   // «Другая» в списке валют открывает поле для ручного ввода кода
   var cs = document.getElementById("newCurSel");
   if(cs) cs.addEventListener("change", function(){
@@ -1188,7 +1234,7 @@ function openExpense(id){
   var existing = id ? S.expenses.filter(function(x){return x.id===id;})[0] : null;
   var isNew = !existing;
   var draft = existing ? JSON.parse(JSON.stringify(existing)) : {
-    id: uid(), title:"", amount:"", cur: baseCode(),
+    id: uid(), title:"", amount:"", cur: spendCode(),
     payer: (ME || (S.people[0] && S.people[0].id) || ""),
     parts: S.people.map(function(p){return p.id;}),
     date: todayISO(), note:"", category:""

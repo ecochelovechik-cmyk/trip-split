@@ -3,7 +3,7 @@
 // Хранит журнал операций в D1, состояние (кто кому должен) собирают клиенты сами —
 // сервер лишь присваивает операциям seq и раздаёт их по порядку. Подробности — в SPEC.md.
 
-import { handleTelegramWebhook, sendDailyDigest, verifyInitData } from './telegram.js';
+import { handleTelegramWebhook, sendDailyDigest, verifyInitData, notifyTripOps } from './telegram.js';
 
 // ---- лимиты защиты от мусора (раздел «API» в SPEC.md) --------------------
 const MAX_OPS_PER_REQUEST = 50;      // операций в одном POST /ops
@@ -171,8 +171,8 @@ async function handleGetTrip(request, env, tripId, url) {
   return jsonResponse({ tripId, title: trip.title, seq, ops, more });
 }
 
-async function handlePostOps(request, env, tripId) {
-  const trip = await env.DB.prepare('SELECT id, title FROM trips WHERE id = ?').bind(tripId).first();
+async function handlePostOps(request, env, tripId, ctx) {
+  const trip = await env.DB.prepare('SELECT id, title, chat_id FROM trips WHERE id = ?').bind(tripId).first();
   if (!trip) return ERRORS.not_found('Поездка не найдена');
 
   let body;
@@ -264,6 +264,14 @@ async function handlePostOps(request, env, tripId) {
     const setTitle = newTitle !== null ? ', title = ?' : '';
     const params = newTitle !== null ? [now, newTitle, tripId] : [now, tripId];
     await env.DB.prepare(`UPDATE trips SET touched = ?${setTitle} WHERE id = ?`).bind(...params).run();
+
+    // Дублируем изменения в привязанный чат. Не задерживаем ответ телефону:
+    // отправка идёт фоном, её падение не должно ломать запись операций.
+    if (trip.chat_id && env.BOT_TOKEN) {
+      const job = notifyTripOps(env, { id: tripId, chat_id: trip.chat_id, title: newTitle || trip.title }, applied, author);
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(job);
+      else await job;
+    }
   }
 
   return jsonResponse({ seq: lastSeq, applied });
@@ -311,7 +319,7 @@ export default {
 
       m = pathname.match(/^\/api\/trip\/([^/]+)\/ops$/);
       if (m && method === 'POST') {
-        return await handlePostOps(request, env, decodeURIComponent(m[1]));
+        return await handlePostOps(request, env, decodeURIComponent(m[1]), ctx);
       }
 
       m = pathname.match(/^\/api\/tg\/webhook\/([^/]+)$/);

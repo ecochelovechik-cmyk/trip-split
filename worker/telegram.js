@@ -700,4 +700,103 @@ async function sendDailyDigest(env) {
   }
 }
 
-export { verifyInitData, handleTelegramWebhook, sendDailyDigest };
+// =============================================================================
+// 8. Уведомление в чат о новых операциях (вызывается из worker.js после записи)
+// =============================================================================
+
+/** Человекочитаемая строка одной операции. Возвращает null для тех, о которых не пишем. */
+function opLine(state, op) {
+  const p = op.payload || {};
+  const base = state.trip.base;
+  const nameOf = (pid) => {
+    const person = state.people.find((x) => x.id === pid);
+    return person ? person.name : "кто-то";
+  };
+
+  if (op.kind === "expense.add" || op.kind === "expense.edit") {
+    const e = state.expenses.find((x) => x.id === p.eid);
+    if (!e) return null;
+    const cents = toCents(state, e.amount, e.cur);
+    const own = fmtAmount(e.amount, e.cur);
+    // если валюта траты не базовая — показываем и пересчёт, иначе не дублируем одно и то же
+    const conv = e.cur === base ? "" : ` (${esc(fmtCents(cents, base))})`;
+    const parts = (e.parts || []).filter((id) => state.people.some((x) => x.id === id));
+    const forWho = parts.length === state.people.length && parts.length
+      ? "на всех"
+      : parts.map(nameOf).join(", ") || "ни на кого";
+    const icon = op.kind === "expense.add" ? "➕" : "✏️";
+    const verb = op.kind === "expense.add" ? "" : " (правка)";
+    return `${icon} <b>${esc(e.title || "Без названия")}</b>${verb} — ${esc(own)}${conv}\n` +
+           `    платил ${esc(nameOf(e.payer))} · ${esc(forWho)}`;
+  }
+
+  if (op.kind === "expense.del") return `🗑 Трата удалена`;
+
+  if (op.kind === "payment.add") {
+    const amt = fmtCents(Math.round((Number(p.amount) || 0) * 100), base);
+    return `💸 Возврат долга: ${esc(nameOf(p.from))} → ${esc(nameOf(p.to))}: ${esc(amt)}`;
+  }
+  if (op.kind === "payment.del") return `🗑 Возврат долга отменён`;
+
+  if (op.kind === "person.add") return `👤 Добавлен участник: ${esc(p.name || "")}`;
+  if (op.kind === "person.del") return `👤 Участник удалён`;
+  if (op.kind === "person.rename") return `👤 Переименован: ${esc(p.name || "")}`;
+
+  return null; // trip.meta, cur.set и прочая настройка — молча
+}
+
+function fmtAmount(amount, code) {
+  const dec = NO_DEC[String(code || "").toUpperCase()] ? 0 : 2;
+  const parts = (Math.abs(Number(amount) || 0)).toFixed(dec).split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return parts.join(",") + " " + code;
+}
+
+/**
+ * Пишет в привязанный чат, что изменилось, и текущий расклад «кто кому должен».
+ * Одно сообщение на запрос, даже если операций пришло несколько.
+ * @param {object} env
+ * @param {{id:string, chat_id:string, title:string}} trip
+ * @param {string[]} appliedIds — op_id операций, которые реально записались
+ * @param {string} author
+ */
+async function notifyTripOps(env, trip, appliedIds, author) {
+  if (!env.BOT_TOKEN || !trip || !trip.chat_id || !appliedIds || !appliedIds.length) return;
+  try {
+    const ops = await dbGetAllOps(env, trip.id);
+    const state = reduceOps(ops);
+
+    const fresh = ops.filter((o) => appliedIds.indexOf(o.id) >= 0);
+    const lines = [];
+    for (const op of fresh) {
+      const line = opLine(state, op);
+      if (line) lines.push(line);
+    }
+    if (!lines.length) return; // пришла только настройка — молчим
+
+    const { rows } = computeBalances(state);
+    const transfers = computeTransfers(rows);
+    const base = state.trip.base;
+
+    const out = [];
+    if (author) out.push(`<i>${esc(author)}</i>`);
+    out.push(...lines);
+    out.push("");
+    if (!transfers.length) {
+      out.push("✅ Все в расчёте.");
+    } else {
+      out.push("<b>Кто кому должен:</b>");
+      for (const t of transfers) {
+        const from = rows.find((r) => r.id === t.from);
+        const to = rows.find((r) => r.id === t.to);
+        out.push(`${esc(from ? from.name : "?")} → ${esc(to ? to.name : "?")}: ${esc(fmtCents(t.cents, base))}`);
+      }
+    }
+    await sendMessage(env.BOT_TOKEN, trip.chat_id, out.join("\n"));
+  } catch (e) {
+    // уведомление — не критичный путь: операции уже записаны, молча не роняем API
+    console.error("notifyTripOps: " + (e && e.message ? e.message : e));
+  }
+}
+
+export { verifyInitData, handleTelegramWebhook, sendDailyDigest, notifyTripOps };
