@@ -165,6 +165,10 @@ window.I18N = {
     "settings.me.clear": "Не выбрано",
     "settings.me.hint": "Выбор хранится только на вашем устройстве — подсвечивает ваши долги.",
     "settings.howto.summary": "Открыть как приложение на телефоне",
+    "settings.update.summary": "Обновить приложение",
+    "settings.update.btn": "Обновить сейчас",
+    "settings.update.hint": "Если не видно новых возможностей — телефон показывает старую сохранённую копию. Кнопка загрузит свежую. Поездки и траты не пропадут.",
+    "settings.update.working": "Обновляю…",
     "settings.privacy.summary": "Ограничить доступ группой в Telegram",
 
     "howto.ios.title": "iPhone — Safari",
@@ -415,6 +419,10 @@ window.I18N = {
     "settings.me.clear": "Tanlanmagan",
     "settings.me.hint": "Tanlov faqat sizning qurilmangizda saqlanadi — qarzlaringizni ajratib ko'rsatadi.",
     "settings.howto.summary": "Telefonda ilova sifatida ochish",
+    "settings.update.summary": "Ilovani yangilash",
+    "settings.update.btn": "Hozir yangilash",
+    "settings.update.hint": "Yangi imkoniyatlar ko'rinmasa — telefon eski saqlangan nusxani ko'rsatyapti. Tugma yangisini yuklaydi. Sayohat va xarajatlar yo'qolmaydi.",
+    "settings.update.working": "Yangilanmoqda…",
     "settings.privacy.summary": "Telegram guruhi orqali kirishni cheklash",
 
     "howto.ios.title": "iPhone — Safari",
@@ -665,6 +673,10 @@ window.I18N = {
     "settings.me.clear": "Not selected",
     "settings.me.hint": "The choice is saved only on your device — it highlights your debts.",
     "settings.howto.summary": "Open as an app on your phone",
+    "settings.update.summary": "Update the app",
+    "settings.update.btn": "Update now",
+    "settings.update.hint": "If new features are missing, your phone is showing an old saved copy. This loads the fresh one. Trips and expenses are kept.",
+    "settings.update.working": "Updating…",
     "settings.privacy.summary": "Restrict access to a Telegram group",
 
     "howto.ios.title": "iPhone — Safari",

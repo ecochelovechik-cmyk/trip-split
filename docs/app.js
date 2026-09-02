@@ -15,7 +15,7 @@ var LS_LANG = "ts.lang";
 var LS_HISTORY_PREFIX = "ts.history.";
 var HISTORY_MAX = 200;
 var POLL_MS = 8000;
-var APP_VERSION_DATE = "23.08.2026";
+var APP_VERSION_DATE = "02.09.2026";
 var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
@@ -1020,6 +1020,11 @@ function renderTrip(){
 
   h.push('<details class="setup"><summary>'+esc(T("settings.howto.summary"))+'</summary>'+howtoHTML()+'</details>');
 
+  h.push('<details class="setup"><summary>'+esc(T("settings.update.summary"))+'</summary>'+
+         '<div class="pad"><button class="btn btn-primary" data-act="appUpdate">'+esc(T("settings.update.btn"))+'</button>'+
+         '<div class="hint" style="margin-top:8px">'+esc(T("settings.update.hint"))+'</div>'+
+         '<div class="hint" style="margin-top:4px">'+esc(T("footer.version",{date:APP_VERSION_DATE}))+'</div></div></details>');
+
   h.push('<details class="setup"><summary>'+esc(T("settings.privacy.summary"))+'</summary>'+privacyHTML()+'</details>');
 
   h.push('<details class="setup"><summary>'+esc(T("settings.me.summary"))+'</summary><div class="pad"><div class="chips">');
@@ -1130,6 +1135,31 @@ function addSpendCurrencyInline(){
   var row = document.getElementById("spendRateRow");
   if(row) row.hidden = true;
 }
+/* Принудительное обновление приложения: чистит кэш service worker'а и перезагружает.
+   Нужно потому, что статика отдаётся из кэша (см. sw.js) и человек может неделями
+   сидеть на старой версии, если забыли поднять CACHE_VERSION. Поездки и траты лежат
+   в localStorage и на сервере — их это НЕ трогает. */
+function forceUpdateApp(){
+  toast(T("settings.update.working"));
+  var jobs = [];
+  try {
+    if(window.caches && caches.keys){
+      jobs.push(caches.keys().then(function(keys){
+        return Promise.all(keys.map(function(k){ return caches.delete(k); }));
+      }));
+    }
+    if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+      jobs.push(navigator.serviceWorker.getRegistrations().then(function(regs){
+        return Promise.all(regs.map(function(r){ return r.unregister(); }));
+      }));
+    }
+  } catch(e){ /* приватный режим — просто перезагрузимся */ }
+  Promise.all(jobs).catch(function(){}).then(function(){
+    // ?v= обходит кэш самого браузера, hash сохраняем — останемся в той же поездке
+    var base = location.origin + location.pathname + "?v=" + Date.now();
+    location.replace(base + (location.hash || ""));
+  });
+}
 function removeCurrencyInline(code){
   if(S.expenses.some(function(e){return e.cur===code;})){ toast(T("settings.currencies.usedInExpenses")); return; }
   commit("cur.del", {code:code});
@@ -1184,6 +1214,7 @@ app.addEventListener("click", function(ev){
     case "settle": openSettle(parseInt(t.getAttribute("data-i"),10)); break;
     case "addcur": addCurrencyInline(); break;
     case "spendAddCur": addSpendCurrencyInline(); break;
+    case "appUpdate": forceUpdateApp(); break;
     case "delcur": removeCurrencyInline(t.getAttribute("data-code")); break;
     case "copy": copySummary(); break;
   }
