@@ -1719,16 +1719,32 @@ function exportTableRows(){
   });
   rows.push([]);
   rows.push([T("table.section.balances")]);
-  rows.push([T("table.col.person"), T("table.col.paid"), T("table.col.share"), T("table.col.balance")]);
+  // колонка «возвраты» обязательна: без неё непонятно, почему заплативший больше
+  // имеет баланс 0 — он уже получил долг обратно
+  rows.push([T("table.col.person"), T("table.col.paid"), T("table.col.share"),
+             T("table.col.settled"), T("table.col.balance")]);
   c.rows.forEach(function(r){
-    rows.push([r.name, r.paid/100, r.share/100, r.balance/100]);
+    rows.push([r.name, r.paid/100, r.share/100, (r.settled||0)/100, r.balance/100]);
   });
+
+  if(S.payments.length){
+    rows.push([]);
+    rows.push([T("section.payments.title")]);
+    rows.push([T("table.col.date"), T("table.col.from"), T("table.col.to"), T("table.col.amountBase",{base:base})]);
+    S.payments.slice().sort(function(a,b){ return (a.date||"") < (b.date||"") ? -1 : 1; }).forEach(function(p){
+      rows.push([p.date || "", nameOf(p.from), nameOf(p.to), Number(p.amount)||0]);
+    });
+  }
+
   rows.push([]);
   rows.push([T("table.section.transfers")]);
-  rows.push([T("table.col.from"), T("table.col.to"), T("table.col.amountBase",{base:base})]);
-  transfers(c.rows).forEach(function(t){
-    rows.push([nameOf(t.from), nameOf(t.to), t.cents/100]);
-  });
+  var tr = transfers(c.rows);
+  if(tr.length){
+    rows.push([T("table.col.from"), T("table.col.to"), T("table.col.amountBase",{base:base})]);
+    tr.forEach(function(t){ rows.push([nameOf(t.from), nameOf(t.to), t.cents/100]); });
+  } else {
+    rows.push([T("transfers.allClear.title")]);
+  }
   return rows;
 }
 function downloadTable(){
