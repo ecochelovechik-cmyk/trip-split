@@ -42,7 +42,7 @@
 | `person.del` | `{pid}` |
 | `cur.set` | `{code, rate}` — курс: сколько базовой за 1 единицу `code` |
 | `cur.del` | `{code}` |
-| `expense.add` | `{eid, title, amount, cur, payer, parts:[pid], date:"YYYY-MM-DD", note, category?, shares?}` |
+| `expense.add` | `{eid, title, amount, cur, payer, parts:[pid], date:"YYYY-MM-DD", note, category?, shares?, rate?}` |
 | `expense.edit` | `{eid, ...те же поля}` — полная замена полей траты |
 | `expense.del` | `{eid}` |
 | `payment.add` | `{payid, from, to, amount, date, note}` — возврат долга, `amount` в базовой валюте |
@@ -50,6 +50,13 @@
 
 `category` — необязательная строка из фиксированного набора: `food, transport, lodging, fun, shopping, other`.
 Нет значения → трата без категории (в том числе все старые записи до этой фичи).
+
+`rate` — необязательный курс ИМЕННО ЭТОЙ траты (сколько базовой за 1 единицу `cur`).
+Нужен, когда наличные обменяли по своему курсу, отличному от общего курса поездки.
+Правила: число > 0, иначе поле игнорируется и берётся общий курс валюты из `cur.set`.
+Курс траты применяется везде, где сумма переводится в базовую валюту — и к `amount`,
+и к каждой доле из `shares`. Клиент (`docs/app.js`, `expenseRate`/`expenseCents`) и бот
+(`worker/telegram.js`, те же имена) обязаны считать одинаково.
 
 `shares` — необязательный объект `{pid: amount}`, суммы **в валюте траты** (`cur`), не в базовой.
 Задаёт неравные доли вместо деления поровну между `parts`. Правила:
@@ -77,7 +84,7 @@
   trip: {name, base, spendCur},   // spendCur — валюта новых трат, может отсутствовать
   currencies: [{code, rate}],   // базовая валюта всегда rate = 1
   people:  [{id, name}],
-  expenses:[{id, title, amount, cur, payer, parts:[], date, note, category, shares}],
+  expenses:[{id, title, amount, cur, payer, parts:[], date, note, category, shares, rate}],
   // category — строка из набора или отсутствует; shares — {pid:amount} или отсутствует (см. выше)
   payments:[{id, from, to, amount, date, note}]
 }

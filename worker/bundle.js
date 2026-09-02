@@ -188,7 +188,8 @@ function reduceOps(ops) {
           id: p.eid, title: p.title, amount: p.amount, cur: p.cur,
           payer: p.payer, parts: Array.isArray(p.parts) ? p.parts.slice() : [],
           date: p.date, note: p.note,
-          category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares
+          category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares,
+          rate: p.rate
         });
         break;
 
@@ -201,7 +202,8 @@ function reduceOps(ops) {
             id: p.eid, title: p.title, amount: p.amount, cur: p.cur,
             payer: p.payer, parts: Array.isArray(p.parts) ? p.parts.slice() : [],
             date: p.date, note: p.note,
-            category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares
+            category: p.category, shares: p.shares && typeof p.shares === "object" ? Object.assign({}, p.shares) : p.shares,
+            rate: p.rate
           };
         }
         break;
@@ -245,6 +247,18 @@ function toCents(state, amount, code) {
   return Math.round((Number(amount) || 0) * rateOf(state, code) * 100);
 }
 
+/* Курс конкретной траты: свой, если задан в payload (человек обменял наличные по
+   своему курсу), иначе общий курс валюты. Клиент считает так же — docs/app.js. */
+function expenseRate(state, e) {
+  const own = Number(e && e.rate);
+  return (isFinite(own) && own > 0) ? own : rateOf(state, e && e.cur);
+}
+
+function expenseCents(state, e, amount) {
+  const a = (amount === undefined) ? (e && e.amount) : amount;
+  return Math.round((Number(a) || 0) * expenseRate(state, e) * 100);
+}
+
 /**
  * Проверяет валидность shares по правилам SPEC.md:
  * - ключи shares обязаны быть подмножеством parts;
@@ -282,7 +296,7 @@ function computeBalances(state) {
 
   let totalCents = 0;
   for (const e of state.expenses) {
-    const cents = toCents(state, e.amount, e.cur);
+    const cents = expenseCents(state, e);
     const parts = (e.parts || []).filter((id) => Object.prototype.hasOwnProperty.call(paid, id));
     if (!parts.length || !cents) continue;
     totalCents += cents;
@@ -294,7 +308,7 @@ function computeBalances(state) {
     if (isValidShares(e)) {
       // валидный shares: каждая доля переводится в центы базовой валюты тем же
       // курсом, что и вся трата; участники из parts без записи в shares — 0.
-      const rate = rateOf(state, e.cur);
+      const rate = expenseRate(state, e);
       const converted = {};
       parts.forEach((id) => {
         const v = Object.prototype.hasOwnProperty.call(e.shares, id) ? Number(e.shares[id]) || 0 : 0;

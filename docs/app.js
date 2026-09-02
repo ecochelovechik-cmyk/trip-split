@@ -15,7 +15,7 @@ var LS_LANG = "ts.lang";
 var LS_HISTORY_PREFIX = "ts.history.";
 var HISTORY_MAX = 200;
 var POLL_MS = 8000;
-var APP_VERSION_DATE = "02.09.2026";
+var APP_VERSION_DATE = "03.09.2026";
 var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
@@ -218,6 +218,9 @@ function expenseFromPayload(p){
   };
   var shares = normalizeShares(p);
   if(shares) out.shares = shares;
+  // свой курс траты: только положительное число, иначе считаем по общему курсу валюты
+  var rate = Number(p.rate);
+  if(isFinite(rate) && rate > 0) out.rate = rate;
   return out;
 }
 function paymentFromPayload(p){
@@ -305,6 +308,16 @@ function rateOf(code){
   return c ? Number(c.rate) || 0 : 0;
 }
 function toCents(amount, code){ return Math.round((Number(amount)||0) * rateOf(code) * 100); }
+/* Курс конкретной траты: свой, если задан (обменял наличные по своему курсу),
+   иначе общий курс валюты из настроек поездки. Так же считает бот — см. telegram.js. */
+function expenseRate(e){
+  var own = Number(e && e.rate);
+  return (isFinite(own) && own > 0) ? own : rateOf(e && e.cur);
+}
+function expenseCents(e, amount){
+  var a = (amount === undefined) ? e.amount : amount;
+  return Math.round((Number(a)||0) * expenseRate(e) * 100);
+}
 function fmtNum(value, code){
   var dec = NO_DEC[code] ? 0 : 2;
   var abs = Math.abs(value);
@@ -330,14 +343,14 @@ function moneyRaw(amount, code){
    по той же схеме, но только между участниками с ненулевой долей (если такие есть). */
 function shareCentsForExpense(e, order){
   var out = {};
-  var cents = toCents(e.amount, e.cur);
+  var cents = expenseCents(e);
   var parts = (e.parts||[]).filter(function(id){ return order.hasOwnProperty(id); });
   if(!parts.length) return out;
   if(e.shares){
     var converted = {};
     parts.forEach(function(id){
       var v = e.shares.hasOwnProperty(id) ? Number(e.shares[id]) : 0;
-      converted[id] = toCents(isFinite(v) ? v : 0, e.cur);
+      converted[id] = expenseCents(e, isFinite(v) ? v : 0);
     });
     var sum = 0; parts.forEach(function(id){ sum += converted[id]; });
     var remainder = cents - sum;
@@ -360,7 +373,7 @@ function compute(){
   S.people.forEach(function(p,i){ paid[p.id]=0; share[p.id]=0; order[p.id]=i; });
   var totalCents = 0;
   S.expenses.forEach(function(e){
-    var cents = toCents(e.amount, e.cur);
+    var cents = expenseCents(e);
     var parts = (e.parts||[]).filter(function(id){ return paid.hasOwnProperty(id); });
     if(!parts.length || !cents) return;
     totalCents += cents;
@@ -910,7 +923,8 @@ function renderTrip(){
 
   h.push('<section><div class="eyebrow">'+esc(T("section.expenses.title"))+'<span class="sp"></span></div><div class="card">');
   h.push('<div class="filterbar"><input class="inp" id="filter" placeholder="'+esc(T("expenses.filterPlaceholder"))+'" value="'+esc(filterText)+'">'+
-         '<button class="btn btn-sm" data-act="copy">'+esc(T("expenses.copySummary"))+'</button></div>');
+         '<button class="btn btn-sm" data-act="copy">'+esc(T("expenses.copySummary"))+'</button>'+
+         '<button class="btn btn-sm" data-act="table">'+esc(T("expenses.downloadTable"))+'</button></div>');
   h.push('<div class="filterbar chips">'+
     chipHTML("radio","expcatfilter","ecf-all","",!filterCategory,T("expenses.filterCategoryAll"),"soft",' data-act="catfilter"')+
     CATS.map(function(c){ return chipHTML("radio","expcatfilter","ecf-"+c,c,filterCategory===c,CAT_ICON[c]+" "+T("category."+c),"soft",' data-act="catfilter"'); }).join("")+
@@ -930,7 +944,7 @@ function renderTrip(){
     var lastDay = null;
     list.forEach(function(e){
       if(e.date !== lastDay){ lastDay = e.date; h.push('<div class="daygroup">'+esc(dayLabel(e.date))+'</div>'); }
-      var cents = toCents(e.amount, e.cur);
+      var cents = expenseCents(e);
       var parts = (e.parts||[]).filter(function(id){return personById(id);});
       var forWho = parts.length === S.people.length ? T("expenses.for.all") : parts.map(function(id){return nameOf(id);}).join(", ");
       var metaKey = e.shares ? (e.note ? "expenses.metaSharesNote" : "expenses.metaShares") : (e.note ? "expenses.metaNote" : "expenses.meta");
@@ -1217,6 +1231,7 @@ app.addEventListener("click", function(ev){
     case "appUpdate": forceUpdateApp(); break;
     case "delcur": removeCurrencyInline(t.getAttribute("data-code")); break;
     case "copy": copySummary(); break;
+    case "table": downloadTable(); break;
   }
 });
 app.addEventListener("change", function(ev){
@@ -1318,7 +1333,14 @@ function openExpense(id){
   body.push('<div class="field"><label for="mAmt-'+mu+'">'+esc(T("expenseModal.amountLabel"))+'</label><div class="amount-row">'+
     '<input class="inp num" id="mAmt-'+mu+'" inputmode="decimal" placeholder="0" value="'+esc(draft.amount)+'">'+
     '<select class="inp" id="mCur-'+mu+'">'+S.currencies.map(function(c){return '<option value="'+esc(c.code)+'"'+(c.code===draft.cur?' selected':'')+'>'+esc(c.code)+'</option>';}).join("")+'</select>'+
-    '</div><div class="hint" id="mConv-'+mu+'"></div></div>');
+    '</div><div class="hint" id="mConv-'+mu+'"></div>'+
+    // свой курс именно этой траты: обменял наличные по своему — впиши его тут
+    '<div class="row" id="mRateRow-'+mu+'" style="margin-top:6px" hidden>'+
+      '<span class="hint">1 <b id="mRateCode-'+mu+'"></b> =</span>'+
+      '<input class="inp num" id="mRate-'+mu+'" inputmode="decimal" style="width:120px; padding:6px 9px" value="'+esc(draft.rate||"")+'">'+
+      '<span class="hint">'+esc(baseCode())+'</span>'+
+    '</div>'+
+    '<div class="hint" id="mRateHint-'+mu+'" hidden>'+esc(T("expenseModal.rateHint"))+'</div></div>');
   body.push('<div class="field"><label for="mTitle-'+mu+'">'+esc(T("expenseModal.titleLabel"))+'</label><input class="inp" id="mTitle-'+mu+'" placeholder="'+esc(T("expenseModal.titlePlaceholder"))+'" value="'+esc(draft.title)+'"></div>');
   body.push('<div class="field"><label>'+esc(T("expenseModal.categoryLabel"))+'</label><div class="chips" id="mCat-'+mu+'">'+
     chipHTML("radio","cat-"+mu,"cat-"+mu+"-none","",!draft.category,T("expenseModal.categoryNone"),"soft")+
@@ -1407,17 +1429,38 @@ function openExpense(id){
     }
   }
 
+  // курс, по которому сейчас считается форма: из поля, если вписан свой, иначе общий
+  function formRate(){
+    var el = m.querySelector("#mRate-"+mu);
+    var own = el ? parseAmount(el.value) : NaN;
+    return (isFinite(own) && own > 0) ? own : rateOf(cur.value);
+  }
+  function formCents(a){ return Math.round((Number(a)||0) * formRate() * 100); }
+
   function refresh(){
     var a = parseAmount(amt.value);
     var code = cur.value;
+    var isBase = code === baseCode();
+    var rateRow = m.querySelector("#mRateRow-"+mu);
+    var rateHint = m.querySelector("#mRateHint-"+mu);
+    // у базовой валюты курс всегда 1 — поле прячем, чтобы не путало
+    if(rateRow) rateRow.hidden = isBase;
+    if(rateHint) rateHint.hidden = isBase;
+    var codeEl = m.querySelector("#mRateCode-"+mu);
+    if(codeEl) codeEl.textContent = code;
+    var rateEl = m.querySelector("#mRate-"+mu);
+    if(rateEl && !rateEl.value && !isBase) rateEl.placeholder = String(rateOf(code));
+
     var conv = m.querySelector("#mConv-"+mu);
-    if(isFinite(a) && code !== baseCode()) conv.textContent = T("expenseModal.convApprox", {amount: money(toCents(a,code)), rate: rateOf(code)});
-    else conv.textContent = code === baseCode() ? T("expenseModal.convBase") : "";
+    if(isFinite(a) && !isBase) conv.textContent = T("expenseModal.convApprox", {amount: money(formCents(a)), rate: formRate()});
+    else conv.textContent = isBase ? T("expenseModal.convBase") : "";
     var n = m.querySelectorAll("#mParts-"+mu+" input:checked").length;
-    m.querySelector("#mPer-"+mu).textContent = (isFinite(a) && n) ? T("expenseModal.perShare", {amount: money(Math.round(toCents(a,code)/n))}) : "";
+    m.querySelector("#mPer-"+mu).textContent = (isFinite(a) && n) ? T("expenseModal.perShare", {amount: money(Math.round(formCents(a)/n))}) : "";
     refreshShareStatus();
   }
   amt.addEventListener("input", refresh);
+  var rateInput = m.querySelector("#mRate-"+mu);
+  if(rateInput) rateInput.addEventListener("input", refresh);
   cur.addEventListener("change", function(){ sharesDraft = {}; refresh(); if(splitMode()==="manual") renderShareRows(); });
   m.querySelector("#mParts-"+mu).addEventListener("change", function(){ if(splitMode()==="manual") renderShareRows(); refresh(); });
   m.querySelector("#mSplitMode-"+mu).addEventListener("change", function(){
@@ -1488,6 +1531,11 @@ function openExpense(id){
       note: m.querySelector("#mNote-"+mu).value.trim()
     };
     if(catEl && catEl.value) payload.category = catEl.value;
+    // курс шлём только если он реально свой — совпадающий с общим хранить незачем
+    if(cur.value !== baseCode()){
+      var ownRate = parseAmount((m.querySelector("#mRate-"+mu)||{}).value || "");
+      if(isFinite(ownRate) && ownRate > 0 && ownRate !== rateOf(cur.value)) payload.rate = ownRate;
+    }
     if(splitMode() === "manual"){
       var code = cur.value, unit = unitFor(code);
       var target = Math.round(a*unit);
@@ -1556,6 +1604,151 @@ function summaryText(){
   }
   return L.join("\n");
 }
+/* ========== выгрузка в таблицу (.xlsx) ==========
+   .xlsx — это zip с xml внутри; собираем сами, без внешних библиотек, чтобы
+   приложение работало офлайн. Код взят из калькулятора себестоимости
+   (Tools\sebes-calc), здесь урезан: только текстовый лист, без фото. */
+var XLSX_CRC = (function(){
+  var t = new Int32Array(256);
+  for(var n=0;n<256;n++){ var c=n; for(var k=0;k<8;k++) c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1); t[n]=c; }
+  return t;
+})();
+function xlsxCrc32(bytes){
+  var c=-1;
+  for(var i=0;i<bytes.length;i++) c = XLSX_CRC[(c ^ bytes[i]) & 0xFF] ^ (c>>>8);
+  return (c ^ -1) >>> 0;
+}
+function xlsxUtf8(str){ return new TextEncoder().encode(str); }
+function xlsxZip(entries){
+  var chunks=[], central=[], offset=0;
+  function u16(v){ return [v & 0xFF, (v>>>8) & 0xFF]; }
+  function u32(v){ return [v & 0xFF, (v>>>8) & 0xFF, (v>>>16) & 0xFF, (v>>>24) & 0xFF]; }
+  entries.forEach(function(e){
+    var name = xlsxUtf8(e.name), data = e.data, sum = xlsxCrc32(data);
+    var local = [].concat(u32(0x04034B50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(sum), u32(data.length), u32(data.length), u16(name.length), u16(0));
+    chunks.push(new Uint8Array(local), name, data);
+    central.push([].concat(u32(0x02014B50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(sum), u32(data.length), u32(data.length),
+      u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset)), name);
+    offset += 30 + name.length + data.length;
+  });
+  var cdStart = offset, cdSize = 0;
+  central.forEach(function(x){ cdSize += x.length; });
+  var tail = [].concat(u32(0x06054B50), u16(0), u16(0),
+    u16(entries.length), u16(entries.length), u32(cdSize), u32(cdStart), u16(0));
+  var parts=[];
+  chunks.forEach(function(c){ parts.push(c); });
+  central.forEach(function(c){ parts.push(c instanceof Uint8Array ? c : new Uint8Array(c)); });
+  parts.push(new Uint8Array(tail));
+  return new Blob(parts, {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+function xmlEsc(v){
+  return String(v == null ? "" : v)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&apos;")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,"");
+}
+function xlsxColName(i){
+  var s=""; i+=1;
+  while(i>0){ var m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=(i-m-1)/26; }
+  return s;
+}
+/* rows: массив массивов. Число уходит числом (Excel сможет считать), остальное — текстом. */
+function buildXlsx(rows, sheetName){
+  var body = rows.map(function(row, r){
+    var cells = row.map(function(v, c){
+      var ref = xlsxColName(c) + (r+1);
+      if(typeof v === "number" && isFinite(v)) return '<c r="'+ref+'"><v>'+v+'</v></c>';
+      var s = String(v == null ? "" : v);
+      return '<c r="'+ref+'" t="inlineStr" s="'+(r===0?1:0)+'"><is><t xml:space="preserve">'+xmlEsc(s)+'</t></is></c>';
+    }).join("");
+    return '<row r="'+(r+1)+'">'+cells+'</row>';
+  }).join("");
+  var sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+    '<sheetData>'+body+'</sheetData></worksheet>';
+  var styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'+
+    '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'+
+    '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'+
+    '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'+
+    '<borders count="1"><border/></borders>'+
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'+
+    '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'+
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'+
+    '</styleSheet>';
+  var types = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'+
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'+
+    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'+
+    '<Default Extension="xml" ContentType="application/xml"/>'+
+    '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'+
+    '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'+
+    '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+
+    '</Types>';
+  return xlsxZip([
+    {name:"[Content_Types].xml", data:xlsxUtf8(types)},
+    {name:"_rels/.rels", data:xlsxUtf8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')},
+    {name:"xl/workbook.xml", data:xlsxUtf8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="'+xmlEsc(sheetName||"Sheet1")+'" sheetId="1" r:id="rId1"/></sheets></workbook>')},
+    {name:"xl/_rels/workbook.xml.rels", data:xlsxUtf8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')},
+    {name:"xl/styles.xml", data:xlsxUtf8(styles)},
+    {name:"xl/worksheets/sheet1.xml", data:xlsxUtf8(sheet)}
+  ]);
+}
+/* Таблица поездки: траты + кто сколько заплатил + кто кому отдаёт. */
+function exportTableRows(){
+  var c = compute();
+  var base = baseCode();
+  var rows = [[
+    T("table.col.date"), T("table.col.title"), T("table.col.category"),
+    T("table.col.amount"), T("table.col.currency"), T("table.col.rate"),
+    T("table.col.inBase",{base:base}), T("table.col.payer"), T("table.col.forWhom"), T("table.col.note")
+  ]];
+  S.expenses.slice().sort(function(a,b){ return (a.date||"") < (b.date||"") ? -1 : 1; }).forEach(function(e){
+    var parts = (e.parts||[]).filter(function(id){ return personById(id); });
+    rows.push([
+      e.date || "", e.title || T("expenses.noTitle"),
+      e.category ? T("category."+e.category) : "",
+      Number(e.amount)||0, e.cur,
+      e.cur === base ? 1 : expenseRate(e),
+      Math.round(expenseCents(e))/100,
+      nameOf(e.payer),
+      parts.length === S.people.length ? T("expenses.for.all") : parts.map(function(id){return nameOf(id);}).join(", "),
+      e.note || ""
+    ]);
+  });
+  rows.push([]);
+  rows.push([T("table.section.balances")]);
+  rows.push([T("table.col.person"), T("table.col.paid"), T("table.col.share"), T("table.col.balance")]);
+  c.rows.forEach(function(r){
+    rows.push([r.name, r.paid/100, r.share/100, r.balance/100]);
+  });
+  rows.push([]);
+  rows.push([T("table.section.transfers")]);
+  rows.push([T("table.col.from"), T("table.col.to"), T("table.col.amountBase",{base:base})]);
+  transfers(c.rows).forEach(function(t){
+    rows.push([nameOf(t.from), nameOf(t.to), t.cents/100]);
+  });
+  return rows;
+}
+function downloadTable(){
+  try {
+    var blob = buildXlsx(exportTableRows(), T("table.sheetName"));
+    var name = (S.trip.name || "poezdka").replace(/[\\/:*?"<>|]/g,"").trim().replace(/\s+/g,"-");
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = name + "-" + todayISO() + ".xlsx";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+    toast(T("table.downloaded"));
+  } catch(e){
+    toast(T("table.failed"));
+  }
+}
+
 function copySummary(){
   var text = summaryText();
   function fallback(){
