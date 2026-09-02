@@ -683,7 +683,7 @@ async function sendDailyDigest(env) {
       let dailyCents = 0;
       for (const op of recentOps) {
         if (op.kind === "expense.add") {
-          dailyCents += toCents(state, op.payload.amount, op.payload.cur);
+          dailyCents += expenseCents(state, op.payload);
         }
       }
 
@@ -730,7 +730,7 @@ function opLine(state, op) {
   if (op.kind === "expense.add" || op.kind === "expense.edit") {
     const e = state.expenses.find((x) => x.id === p.eid);
     if (!e) return null;
-    const cents = toCents(state, e.amount, e.cur);
+    const cents = expenseCents(state, e);   // курс траты, а не общий курс валюты
     const own = fmtAmount(e.amount, e.cur);
     // если валюта траты не базовая — показываем и пересчёт, иначе не дублируем одно и то же
     const conv = e.cur === base ? "" : ` (${esc(fmtCents(cents, base))})`;
