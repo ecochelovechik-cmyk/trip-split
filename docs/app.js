@@ -996,17 +996,25 @@ function renderTrip(){
   h.push('<div class="inline-form"><div class="row" style="flex:1; flex-wrap:wrap"><span class="hint">'+esc(T("settings.currencies.baseLabel"))+'</span><select class="inp" id="baseSel" style="max-width:150px">'+
          S.currencies.map(function(c){return '<option value="'+esc(c.code)+'"'+(c.code===baseCode()?' selected':'')+'>'+esc(c.code)+'</option>';}).join("")+
          '</select></div></div>');
-  // «Мы сейчас в …» — задаёт валюту новых трат, чтобы не переключать её каждый раз
+  // «Мы сейчас в …» — задаёт валюту новых трат. Показываем ВСЕ страны: если валюты
+  // ещё нет в поездке, тут же спрашиваем курс и добавляем её — иначе человеку пришлось бы
+  // сначала догадаться завести валюту отдельно (грабля, найденная 02.09.2026).
   h.push('<div class="inline-form"><div class="row" style="flex:1; flex-wrap:wrap">'+
          '<span class="hint">'+esc(T("settings.currencies.spendLabel"))+'</span>'+
          '<select class="inp" id="spendSel" style="max-width:230px">'+
            '<option value="">'+esc(T("settings.currencies.spendBase",{base:baseCode()}))+'</option>'+
-           COUNTRIES.filter(function(c){ return S.currencies.some(function(x){return x.code===c.cur;}); })
-             .map(function(c){
+           COUNTRIES.map(function(c){
+               var have = S.currencies.some(function(x){return x.code===c.cur;});
                return '<option value="'+esc(c.cur)+'"'+(S.trip.spendCur===c.cur?" selected":"")+'>'+
-                      esc(c.flag+" "+c.ru+" — "+c.cur)+'</option>';
+                      esc(c.flag+" "+c.ru+" — "+c.cur+(have?"":" ⚠")) +'</option>';
              }).join("")+
          '</select></div>'+
+         '<div class="row" id="spendRateRow" style="flex-basis:100%; margin-top:6px" hidden>'+
+           '<span class="hint">1 <b id="spendRateCode"></b> =</span>'+
+           '<input class="inp num" id="spendRate" inputmode="decimal" style="width:130px; padding:6px 9px">'+
+           '<span class="hint">'+esc(baseCode())+'</span>'+
+           '<button class="btn btn-sm" data-act="spendAddCur">'+esc(T("settings.currencies.add"))+'</button>'+
+         '</div>'+
          '<div class="hint" style="flex-basis:100%">'+esc(T("settings.currencies.spendHint"))+'</div></div>');
   h.push("</details>");
 
@@ -1047,7 +1055,22 @@ function bindTripEvents(){
   var bs = document.getElementById("baseSel");
   if(bs) bs.addEventListener("change", function(){ setBaseCurrency(bs.value); });
   var sp = document.getElementById("spendSel");
-  if(sp) sp.addEventListener("change", function(){ commit("trip.meta", {spendCur: sp.value}); });
+  if(sp) sp.addEventListener("change", function(){
+    var code = sp.value;
+    var have = !code || S.currencies.some(function(x){return x.code===code;});
+    var row = document.getElementById("spendRateRow");
+    if(have){
+      if(row) row.hidden = true;
+      commit("trip.meta", {spendCur: code});
+    } else if(row){
+      // валюты ещё нет в поездке — сначала спрашиваем курс, переключаем после «Добавить»
+      document.getElementById("spendRateCode").textContent = code;
+      var rateEl = document.getElementById("spendRate");
+      rateEl.value = "";
+      row.hidden = false;
+      rateEl.focus();
+    }
+  });
   // «Другая» в списке валют открывает поле для ручного ввода кода
   var cs = document.getElementById("newCurSel");
   if(cs) cs.addEventListener("change", function(){
@@ -1094,6 +1117,18 @@ function addCurrencyInline(){
   if(S.currencies.some(function(c){return c.code===code;})){ toast(T("settings.currencies.alreadyExists")); return; }
   if(!isFinite(rate) || rate<=0){ toast(T("settings.currencies.rateRequired",{base:baseCode(), code:code})); return; }
   commit("cur.set", {code:code, rate:rate});
+}
+function addSpendCurrencyInline(){
+  var selEl = document.getElementById("spendSel");
+  var rateEl = document.getElementById("spendRate");
+  var code = (selEl && selEl.value || "").trim().toUpperCase();
+  var rate = parseAmount(rateEl ? rateEl.value : "");
+  if(!code) return;
+  if(!isFinite(rate) || rate<=0){ toast(T("settings.currencies.rateRequired",{base:baseCode(), code:code})); return; }
+  if(!S.currencies.some(function(c){return c.code===code;})) commit("cur.set", {code:code, rate:rate});
+  commit("trip.meta", {spendCur: code});
+  var row = document.getElementById("spendRateRow");
+  if(row) row.hidden = true;
 }
 function removeCurrencyInline(code){
   if(S.expenses.some(function(e){return e.cur===code;})){ toast(T("settings.currencies.usedInExpenses")); return; }
@@ -1148,6 +1183,7 @@ app.addEventListener("click", function(ev){
     case "delpay": deletePayment(id); break;
     case "settle": openSettle(parseInt(t.getAttribute("data-i"),10)); break;
     case "addcur": addCurrencyInline(); break;
+    case "spendAddCur": addSpendCurrencyInline(); break;
     case "delcur": removeCurrencyInline(t.getAttribute("data-code")); break;
     case "copy": copySummary(); break;
   }
