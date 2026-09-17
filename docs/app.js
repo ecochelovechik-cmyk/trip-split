@@ -15,7 +15,7 @@ var LS_LANG = "ts.lang";
 var LS_HISTORY_PREFIX = "ts.history.";
 var HISTORY_MAX = 200;
 var POLL_MS = 8000;
-var APP_VERSION_DATE = "03.09.2026";
+var APP_VERSION_DATE = "17.09.2026";
 var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
@@ -361,12 +361,24 @@ function shareCentsForExpense(e, order){
     parts.forEach(function(id){ out[id] = converted[id]; });
   } else {
     var sorted = parts.slice().sort(function(a,b){ return order[a]-order[b]; });
-    var per = Math.floor(cents/sorted.length);
-    var rem = cents - per*sorted.length;
-    sorted.forEach(function(id,i){ out[id] = per + (i<rem?1:0); });
+    // Шаг деления — наименьшая РЕАЛЬНАЯ единица базовой валюты: для сума/воны/иены
+    // это 1 единица (100 «центов»), а не копейка, которой у них не существует.
+    // Иначе доли выходят вида 1 026 333,35 сума — цифры, которых не бывает в жизни.
+    var step = baseStepCents();
+    var units = Math.floor(cents/step);
+    var per = Math.floor(units/sorted.length);
+    var rem = units - per*sorted.length;
+    sorted.forEach(function(id,i){ out[id] = (per + (i<rem?1:0)) * step; });
+    // остаток мельче шага (бывает, если сумма траты не кратна единице валюты)
+    // отдаём первому по списку, чтобы сумма долей точно равнялась сумме траты
+    var placed = 0; sorted.forEach(function(id){ placed += out[id]; });
+    if(placed !== cents) out[sorted[0]] += cents - placed;
   }
   return out;
 }
+
+// сколько «центов» в одной реальной единице базовой валюты: 1 сум = 100, 1 доллар = 1 цент
+function baseStepCents(){ return NO_DEC[baseCode()] ? 100 : 1; }
 
 function compute(){
   var paid = {}, share = {}, order = {};

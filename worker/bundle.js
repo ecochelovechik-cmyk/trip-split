@@ -330,10 +330,21 @@ function computeBalances(state) {
       }
       parts.forEach((id) => { share[id] += converted[id]; });
     } else {
-      // остаток раздаётся по копейке первым rem участникам в порядке списка людей — детерминированно
-      const per = Math.floor(cents / parts.length);
-      const rem = cents - per * parts.length;
-      parts.forEach((id, i) => { share[id] += per + (i < rem ? 1 : 0); });
+      // Шаг деления — наименьшая РЕАЛЬНАЯ единица базовой валюты (1 сум = 100 «центов»,
+      // 1 доллар = 1 цент). Иначе в сумах/вонах вылезают копейки, которых не существует.
+      // Клиент делит так же — docs/app.js, baseStepCents().
+      const step = NO_DEC[String(state.trip.base || "").toUpperCase()] ? 100 : 1;
+      const units = Math.floor(cents / step);
+      const per = Math.floor(units / parts.length);
+      const rem = units - per * parts.length;
+      let placed = 0;
+      parts.forEach((id, i) => {
+        const v = (per + (i < rem ? 1 : 0)) * step;
+        share[id] += v;
+        placed += v;
+      });
+      // остаток мельче шага — первому по списку, чтобы сумма долей сошлась с тратой
+      if (placed !== cents && parts.length) share[parts[0]] += cents - placed;
     }
   }
 
