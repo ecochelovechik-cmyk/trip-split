@@ -464,7 +464,7 @@ function tripLinkFor(env, tripId) {
   const base = (env && env.PAGES_URL) || DEFAULT_PAGES_URL;
   // Доступ к поездке = знание tripId, кладём его в hash (не в query — GitHub Pages
   // может редиректить query на другой путь при 404, hash безопаснее).
-  return tripId ? `${base}#${tripId}` : base;
+  return tripId ? `${base}#t=${tripId}` : base;
 }
 
 function formatSummary(state, trip) {
@@ -1112,7 +1112,7 @@ async function handlePostOps(request, env, tripId, ctx) {
 }
 
 // Поднимать при каждом деплое: по /api/health видно, какой воркер живёт на сервере.
-const WORKER_VERSION = '2026-09-18';
+const WORKER_VERSION = '2026-09-18b';
 
 function handleHealth() {
   return jsonResponse({ ok: true, ts: Date.now(), version: WORKER_VERSION });

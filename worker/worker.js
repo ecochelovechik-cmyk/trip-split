@@ -278,7 +278,7 @@ async function handlePostOps(request, env, tripId, ctx) {
 }
 
 // Поднимать при каждом деплое: по /api/health видно, какой воркер живёт на сервере.
-const WORKER_VERSION = '2026-09-18';
+const WORKER_VERSION = '2026-09-18b';
 
 function handleHealth() {
   return jsonResponse({ ok: true, ts: Date.now(), version: WORKER_VERSION });

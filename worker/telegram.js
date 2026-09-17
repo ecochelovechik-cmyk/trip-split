@@ -458,7 +458,7 @@ function tripLinkFor(env, tripId) {
   const base = (env && env.PAGES_URL) || DEFAULT_PAGES_URL;
   // Доступ к поездке = знание tripId, кладём его в hash (не в query — GitHub Pages
   // может редиректить query на другой путь при 404, hash безопаснее).
-  return tripId ? `${base}#${tripId}` : base;
+  return tripId ? `${base}#t=${tripId}` : base;
 }
 
 function formatSummary(state, trip) {

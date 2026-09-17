@@ -623,7 +623,8 @@ function updateStatus(){
 function route(){
   stopPolling();
   var h = location.hash || "";
-  var m = h.match(/^#t=([^&]*)/);
+  // принимаем и «#t=<id>» (своя ссылка), и голый «#<id>» (так строил ссылку бот)
+  var m = h.match(/^#t=([^&]*)/) || h.match(/^#([A-Za-z0-9]{10,})$/);
   if(m && m[1]){
     openTrip(decodeURIComponent(m[1]));
   } else {
