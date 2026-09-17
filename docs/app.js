@@ -15,7 +15,7 @@ var LS_LANG = "ts.lang";
 var LS_HISTORY_PREFIX = "ts.history.";
 var HISTORY_MAX = 200;
 var POLL_MS = 8000;
-var APP_VERSION_DATE = "17.09.2026";
+var APP_VERSION_DATE = "18.09.2026";
 var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
@@ -426,6 +426,38 @@ function transfers(rows){
     if(cred[j].v<=0) j++;
   }
   return out;
+}
+
+/* Расшифровка по одному участнику: из каких трат сложилась его доля (и кто за
+   них платил), что он сам оплатил за других, и возвраты. Всё в центах базовой. */
+function personBreakdown(pid){
+  var order = {};
+  S.people.forEach(function(p,i){ order[p.id]=i; });
+  var byPayer = {}, payerOrder = [], shareTotal = 0;
+  var paidFor = [], paidTotal = 0;
+  S.expenses.slice().sort(function(a,b){ return (a.date||"") < (b.date||"") ? -1 : 1; }).forEach(function(e){
+    var cents = expenseCents(e);
+    var parts = (e.parts||[]).filter(function(id){ return order.hasOwnProperty(id); });
+    if(!parts.length || !cents) return;
+    var sc = shareCentsForExpense(e, order);
+    var mine = sc[pid] || 0;
+    if(parts.indexOf(pid) >= 0 && mine){
+      var payer = order.hasOwnProperty(e.payer) ? e.payer : "";
+      if(!byPayer[payer]){ byPayer[payer] = {payer:payer, total:0, items:[]}; payerOrder.push(payer); }
+      byPayer[payer].items.push({e:e, cents:mine});
+      byPayer[payer].total += mine;
+      shareTotal += mine;
+    }
+    if(e.payer === pid){
+      paidFor.push({e:e, cents:cents, others:cents - mine});
+      paidTotal += cents;
+    }
+  });
+  var groups = payerOrder.map(function(k){ return byPayer[k]; }).sort(function(a,b){
+    if(a.payer === pid) return 1; if(b.payer === pid) return -1; return b.total - a.total;
+  });
+  var pays = S.payments.filter(function(p){ return p.from === pid || p.to === pid; });
+  return { groups:groups, shareTotal:shareTotal, paidFor:paidFor, paidTotal:paidTotal, payments:pays };
 }
 
 /* ========== автор операций ========== */
@@ -923,8 +955,8 @@ function renderTrip(){
     var shown = withoutNoise(r.balance);   // копеечный хвост от смены валюты — не долг
     var pos = shown>0, zero = shown===0;
     var w = Math.round(Math.abs(shown)/maxAbs*100);
-    h.push('<div class="bal'+(ME===r.id?' mine':'')+'">');
-    h.push('<div class="bal-name">'+esc(r.name)+(ME===r.id?'<span class="you-tag">'+esc(T("balances.you"))+'</span>':'')+'</div>');
+    h.push('<div class="bal'+(ME===r.id?' mine':'')+'" data-act="why" data-id="'+esc(r.id)+'" role="button" tabindex="0">');
+    h.push('<div class="bal-name">'+esc(r.name)+(ME===r.id?'<span class="you-tag">'+esc(T("balances.you"))+'</span>':'')+'<span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
     h.push('<div class="bal-sum num '+(zero?'muted':(pos?'pos':'neg'))+'">'+(zero?money(0):(pos?'+':'')+money(shown))+'</div>');
     var detail = r.settled ? T("balances.detailSettled",{paid:money(r.paid),share:money(r.share),settled:(r.settled>0?'+':'')+money(r.settled)}) : T("balances.detail",{paid:money(r.paid),share:money(r.share)});
     h.push('<div class="bal-sub num">'+esc(detail)+'</div>');
@@ -1238,6 +1270,7 @@ app.addEventListener("click", function(ev){
     case "del": confirmDeleteExpense(id); break;
     case "delpay": deletePayment(id); break;
     case "settle": openSettle(parseInt(t.getAttribute("data-i"),10)); break;
+    case "why": openWhy(id); break;
     case "addcur": addCurrencyInline(); break;
     case "spendAddCur": addSpendCurrencyInline(); break;
     case "appUpdate": forceUpdateApp(); break;
@@ -1596,6 +1629,45 @@ function openSettle(i){
   });
 }
 
+/* Модалка «за что»: доля участника по позициям, сгруппированная по тому, кто платил. */
+function openWhy(pid){
+  var p = personById(pid);
+  if(!p) return;
+  var b = personBreakdown(pid);
+  var h = [];
+  function line(title, sub, amount){
+    return '<div class="why-line"><div class="why-txt"><div>'+esc(title)+'</div>'+(sub?'<div class="hint">'+esc(sub)+'</div>':'')+'</div><div class="num why-sum">'+esc(amount)+'</div></div>';
+  }
+  h.push('<div class="why-head">'+esc(T("why.shareTotal"))+'<b class="num">'+esc(money(b.shareTotal))+'</b></div>');
+  if(!b.groups.length) h.push('<div class="hint">'+esc(T("why.noShare"))+'</div>');
+  b.groups.forEach(function(g){
+    var head = g.payer === pid ? T("why.groupSelf") : T("why.groupOwe", {name: g.payer ? nameOf(g.payer) : "?"});
+    h.push('<div class="why-group"><div class="why-group-head">'+esc(head)+'<span class="num">'+esc(money(g.total))+'</span></div>');
+    g.items.forEach(function(it){
+      var e = it.e, n = (e.parts||[]).length;
+      h.push(line(e.title || T("expenses.noTitle"), (e.date||"") + " · " + moneyRaw(e.amount, e.cur) + " · " + T("why.splitAmong", {n:n}), money(it.cents)));
+    });
+    h.push('</div>');
+  });
+  if(b.paidFor.length){
+    h.push('<div class="why-head">'+esc(T("why.paidTotal"))+'<b class="num">'+esc(money(b.paidTotal))+'</b></div><div class="why-group">');
+    b.paidFor.forEach(function(it){
+      h.push(line(it.e.title || T("expenses.noTitle"), (it.e.date||"") + " · " + T("why.forOthers", {amount: money(it.others)}), money(it.cents)));
+    });
+    h.push('</div>');
+  }
+  if(b.payments.length){
+    h.push('<div class="why-head">'+esc(T("section.payments.title"))+'</div><div class="why-group">');
+    b.payments.forEach(function(pay){
+      var c = Math.round((Number(pay.amount)||0)*100);
+      h.push(line(nameOf(pay.from)+" → "+nameOf(pay.to), pay.date||"", money(c)));
+    });
+    h.push('</div>');
+  }
+  h.push('<div class="hint">'+esc(T("why.netHint"))+'</div>');
+  modal(T("why.title", {name:p.name}), h.join(""), '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("modal.close"))+'</button>');
+}
+
 /* ========== итог текстом ========== */
 function summaryText(){
   var c = compute();
@@ -1747,6 +1819,19 @@ function exportTableRows(){
       rows.push([p.date || "", nameOf(p.from), nameOf(p.to), Number(p.amount)||0]);
     });
   }
+
+  rows.push([]);
+  rows.push([T("table.section.why")]);
+  rows.push([T("table.col.person"), T("table.col.date"), T("table.col.title"), T("table.col.payer"), T("table.col.share")]);
+  S.people.forEach(function(p){
+    var b = personBreakdown(p.id);
+    b.groups.forEach(function(g){
+      g.items.forEach(function(it){
+        rows.push([p.name, it.e.date || "", it.e.title || T("expenses.noTitle"), g.payer ? nameOf(g.payer) : "", it.cents/100]);
+      });
+    });
+    rows.push([p.name, "", T("table.why.total"), "", b.shareTotal/100]);
+  });
 
   rows.push([]);
   rows.push([T("table.section.transfers")]);
