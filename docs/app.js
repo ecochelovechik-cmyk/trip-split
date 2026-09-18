@@ -721,6 +721,7 @@ function openTrip(id){
     list.push(rec);
     saveTrips(list);
   }
+  if(rec.deleted){ delete rec.deleted; saveTrips(list); }
   TRIP_ID = id;
   TRIP_META = rec;
   S = rec.state;
@@ -791,12 +792,48 @@ function confirmDeleteTrip(id){
   var m = modal(T("trips.deleteConfirm.title"), "<div>"+esc(T("trips.deleteConfirm.body",{name:name}))+"</div>",
     '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("trips.deleteConfirm.cancel"))+'</button><button class="btn btn-danger" id="yes">'+esc(T("trips.deleteConfirm.ok"))+'</button>');
   m.querySelector("#yes").addEventListener("click", function(){
-    var list2 = loadTrips().filter(function(x){return x.id!==id;});
+    // не стираем, а помечаем: поездка уходит в «Удалённые», откуда её можно вернуть
+    var list2 = loadTrips();
+    list2.forEach(function(x){ if(x.id===id){ x.deleted = Date.now(); x.favorite = false; } });
     saveTrips(list2);
+    m.close();
+    renderTripList();
+    toast(T("trips.movedToTrash"));
+  });
+}
+function restoreTrip(id){
+  var list = loadTrips();
+  list.forEach(function(x){ if(x.id===id) delete x.deleted; });
+  saveTrips(list);
+  renderTripList();
+  toast(T("trips.restored"));
+}
+function confirmPurgeTrip(id){
+  var rec = loadTrips().filter(function(x){return x.id===id;})[0];
+  var name = rec ? (rec.name || T("trips.untitled")) : id;
+  var bodyKey = (rec && rec.localOnly) ? "trips.purgeConfirm.bodyLocal" : "trips.purgeConfirm.body";
+  var m = modal(T("trips.purgeConfirm.title"), "<div>"+esc(T(bodyKey,{name:name}))+"</div>",
+    '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("trips.deleteConfirm.cancel"))+'</button><button class="btn btn-danger" id="yes">'+esc(T("trips.purge"))+'</button>');
+  m.querySelector("#yes").addEventListener("click", function(){
+    saveTrips(loadTrips().filter(function(x){return x.id!==id;}));
     try{ localStorage.removeItem(LS_QUEUE_PREFIX+id); localStorage.removeItem(LS_ME_PREFIX+id); localStorage.removeItem(LS_HISTORY_PREFIX+id); }catch(e){}
     m.close();
     renderTripList();
   });
+}
+/* В приложении с главного экрана нет адресной строки — ссылку некуда вставить. */
+function openByLinkModal(){
+  var m = modal(T("trips.byLink.title"),
+    '<div class="field"><label for="blInp">'+esc(T("trips.byLink.label"))+'</label><input class="inp" id="blInp" autocomplete="off" placeholder="https://…#t=…"></div>',
+    '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("modal.cancel"))+'</button><button class="btn btn-primary" id="blOk">'+esc(T("trips.open"))+'</button>');
+  m.querySelector("#blOk").addEventListener("click", function(){
+    var v = m.querySelector("#blInp").value.trim();
+    var mm = v.match(/[#&?]t=([A-Za-z0-9]{10,})/) || v.match(/#([A-Za-z0-9]{10,})/) || v.match(/^([A-Za-z0-9]{10,})$/);
+    if(!mm){ toast(T("trips.byLink.bad")); return; }
+    m.close();
+    location.hash = "#t=" + encodeURIComponent(mm[1]);
+  });
+  setTimeout(function(){ var n=m.querySelector("#blInp"); if(n) n.focus(); }, 60);
 }
 
 function openNewTripModal(){
@@ -841,10 +878,12 @@ function renderAll(){
 
 /* ========== экран: список поездок ========== */
 function renderTripList(){
-  var list = loadTrips();
+  var all = loadTrips();
+  var list = all.filter(function(x){ return !x.deleted; });
+  var trash = all.filter(function(x){ return x.deleted; }).sort(function(a,b){ return b.deleted - a.deleted; });
   var h = [];
   if(!window.TRIP_API) h.push('<div class="banner">'+esc(T("banner.noApi"))+'</div>');
-  h.push('<section><div class="eyebrow">'+esc(T("trips.title"))+'<span class="sp"></span><button class="btn btn-primary btn-sm" id="btnNewTrip">'+esc(T("trips.add"))+'</button></div>');
+  h.push('<section><div class="eyebrow">'+esc(T("trips.title"))+'<span class="sp"></span><button class="btn btn-sm" data-act="bylink">'+esc(T("trips.byLink.btn"))+'</button><button class="btn btn-primary btn-sm" id="btnNewTrip">'+esc(T("trips.add"))+'</button></div>');
   if(!list.length){
     h.push('<div class="card"><div class="empty"><b>'+esc(T("trips.empty.title"))+'</b>'+esc(T("trips.empty.hint"))+'</div></div>');
   } else {
@@ -867,6 +906,17 @@ function renderTripList(){
     h.push('</div>');
   }
   h.push('</section>');
+  if(trash.length){
+    h.push('<details class="setup" style="margin-top:18px"><summary>'+esc(T("trips.trash.title",{n:trash.length}))+'</summary><div class="card">');
+    trash.forEach(function(rec){
+      var n = (rec.state && rec.state.expenses) ? rec.state.expenses.length : 0;
+      h.push('<div class="tripcard"><div class="tripcard-name">'+esc(rec.name||T("trips.untitled"))+'</div>');
+      h.push('<div class="tripcard-meta">'+esc(TP("trips.card.expensesCount", n))+' · '+esc(T("trips.trash.deletedAt",{date:new Date(rec.deleted).toLocaleDateString()}))+'</div>');
+      h.push('<div class="tripcard-acts"><button class="btn btn-sm btn-primary" data-act="restoretrip" data-id="'+esc(rec.id)+'">'+esc(T("trips.restore"))+'</button>');
+      h.push('<button class="btn-ghost" data-act="purgetrip" data-id="'+esc(rec.id)+'">'+esc(T("trips.purge"))+'</button></div></div>');
+    });
+    h.push('</div><div class="hint" style="margin-top:8px">'+esc(T("trips.trash.hint"))+'</div></details>');
+  }
   h.push('<div class="footnote">'+esc(T("footer.version",{date:APP_VERSION_DATE}))+'</div>');
   app.innerHTML = h.join("");
   var btn = document.getElementById("btnNewTrip");
@@ -1342,6 +1392,9 @@ app.addEventListener("click", function(ev){
     case "open": location.hash = "#t=" + encodeURIComponent(id); break;
     case "copylink": copyTripLink(id); break;
     case "deltrip": confirmDeleteTrip(id); break;
+    case "restoretrip": restoreTrip(id); break;
+    case "purgetrip": confirmPurgeTrip(id); break;
+    case "bylink": openByLinkModal(); break;
     case "favtoggle": toggleFavorite(id); break;
     case "people": openPeople(); break;
     case "addperson": addPersonInline(); break;
