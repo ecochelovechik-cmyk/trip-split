@@ -31,7 +31,7 @@ const TRIP_ID_ALPHABET =
 
 const KNOWN_KINDS = new Set([
   'trip.meta',
-  'person.add', 'person.rename', 'person.del',
+  'person.add', 'person.rename', 'person.del', 'person.tg',
   'cur.set', 'cur.del',
   'expense.add', 'expense.edit', 'expense.del',
   'payment.add', 'payment.del',
@@ -229,7 +229,7 @@ async function handlePostOps(req, res, tripId) {
 
   let author = isNonEmptyString(body.author, 200) ? body.author.trim() : null;
   if (isNonEmptyString(initData, 8000)) {
-    if (!verifyInitData) {
+    if (!verifyInitData || !process.env.BOT_TOKEN) {
       // telegram.js ещё не написан — локально не можем проверить подпись,
       // доверяем присланному имени, как будто initData не передавали
     } else {
@@ -303,7 +303,7 @@ async function handlePostOps(req, res, tripId) {
 }
 
 function handleHealth(res) {
-  sendJson(res, 200, { ok: true, ts: Date.now() });
+  sendJson(res, 200, { ok: true, ts: Date.now(), version: '9999-dev' });
 }
 
 // ---- статика из ../docs -------------------------------------------------
@@ -320,6 +320,11 @@ const MIME = {
 };
 
 async function serveStatic(req, res, pathname) {
+  // локально приложение ходит в этот же сервер, а не в боевой воркер — тесты не трогают живые поездки
+  if (pathname === '/config.js') {
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8' });
+    return res.end('window.TRIP_API = location.origin;');
+  }
   let rel = pathname === '/' ? '/index.html' : pathname;
   rel = rel.replace(/\/+$/, '') || '/index.html';
   const filePath = path.normalize(path.join(DOCS_DIR, rel));

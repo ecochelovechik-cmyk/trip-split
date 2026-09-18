@@ -15,7 +15,7 @@ var LS_LANG = "ts.lang";
 var LS_HISTORY_PREFIX = "ts.history.";
 var HISTORY_MAX = 200;
 var POLL_MS = 8000;
-var APP_VERSION_DATE = "18.09.2026";
+var APP_VERSION_DATE = "19.09.2026";
 var CATS = ["food","transport","lodging","fun","shopping","other"];
 var CAT_ICON = {food:"🍔", transport:"🚗", lodging:"🏨", fun:"🎉", shopping:"🛍️", other:"✳️"};
 var NO_DEC = {UZS:1,JPY:1,KRW:1,VND:1,IDR:1,CLP:1,ISK:1,HUF:1,KZT:1,KGS:1,TJS:1,LAK:1,MMK:1,KHR:1,PYG:1,RWF:1,XOF:1,XAF:1,COP:1,IRR:1,AMD:1};
@@ -66,6 +66,8 @@ var lastSyncError = null;
 /* ========== Telegram Mini App ========== */
 var TG = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
 var TG_USER = null;
+var TG_PROFILE = null;   // {id, username, photo} того, кто открыл приложение в Telegram
+var SERVER_VERSION = "";  // версия воркера из /api/health — старый сервер не знает person.tg
 
 function initTelegram(){
   if(!TG) return;
@@ -74,6 +76,7 @@ function initTelegram(){
   if(TG.initDataUnsafe && TG.initDataUnsafe.user){
     var u = TG.initDataUnsafe.user;
     TG_USER = ((u.first_name||"") + " " + (u.last_name||"")).trim() || u.username || null;
+    if(u.id) TG_PROFILE = { id: u.id, username: cleanTgUsername(u.username), photo: cleanTgPhoto(u.photo_url) };
   }
   applyTelegramTheme();
   if(typeof TG.onEvent === "function"){
@@ -91,6 +94,8 @@ function applyTelegramTheme(){
   if(tp.button_color) root.setProperty("--accent", tp.button_color);
   else if(tp.link_color) root.setProperty("--accent", tp.link_color);
 }
+function cleanTgUsername(v){ v = String(v||"").replace(/^@/,""); return /^[A-Za-z0-9_]{3,40}$/.test(v) ? v : ""; }
+function cleanTgPhoto(v){ v = String(v||""); return (/^https:\/\/[^\s"'<>]+$/.test(v) && v.length < 500) ? v : ""; }
 function tgInitData(){ return (TG && TG.initData) ? TG.initData : null; }
 
 /* ========== мелкие утилиты ========== */
@@ -251,6 +256,13 @@ function applyOp(state, op){
     case "person.del":
       state.people = state.people.filter(function(x){return x.id !== p.pid;});
       break;
+    case "person.tg":
+      var pt = state.people.filter(function(x){return x.id===p.pid;})[0];
+      if(pt){
+        if(p.tgId) pt.tg = { id: Number(p.tgId)||0, username: cleanTgUsername(p.username), photo: cleanTgPhoto(p.photo) };
+        else delete pt.tg;
+      }
+      break;
     case "cur.set":
       if(p.code){
         var code = p.code.toUpperCase();
@@ -291,6 +303,23 @@ function applyOp(state, op){
 /* ========== деньги — расчёты в целых центах (см. SPEC.md "Деньги") ========== */
 function personById(id){ return S.people.filter(function(p){return p.id===id;})[0]; }
 function nameOf(id){ var p = personById(id); return p ? p.name : "—"; }
+function avatarHTML(p){
+  // буква лежит под фото: если картинка не загрузилась (приватность, офлайн) — видна буква
+  var letter = esc(((p && p.name) || "?").trim().charAt(0).toUpperCase());
+  var img = (p && p.tg && p.tg.photo) ? '<img src="'+esc(p.tg.photo)+'" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">' : "";
+  return '<span class="ava ava-l">'+letter+img+'</span>';
+}
+function tgLinkHTML(p){
+  if(!p || !p.tg) return "";
+  var href = p.tg.username ? "https://t.me/" + p.tg.username : (p.tg.id ? "tg://user?id=" + p.tg.id : "");
+  if(!href) return "";
+  return '<a class="tg-link" data-act="tglink" href="'+esc(href)+'" target="_blank" rel="noopener" title="'+esc(T("tg.write"))+'">'+esc(p.tg.username ? "@"+p.tg.username : T("tg.write"))+'</a>';
+}
+/* Человек «как везде»: аватар + имя + ссылка написать в Telegram (если он привязал себя). */
+function personHTML(id){
+  var p = personById(id);
+  return '<span class="person">'+avatarHTML(p)+'<span>'+esc(nameOf(id))+'</span>'+tgLinkHTML(p)+'</span>';
+}
 function baseCode(){ return S.trip.base; }
 // Валюта, в которой сейчас тратим (страна пребывания). Если она пропала из списка
 // валют поездки — молча откатываемся на базовую, чтобы форму траты не заклинило.
@@ -498,7 +527,26 @@ function tryAutoMe(){
   if(!TG_USER || ME || !TRIP_ID || !S) return;
   var target = TG_USER.trim().toLowerCase();
   var match = S.people.filter(function(p){ return (p.name||"").trim().toLowerCase() === target; })[0];
-  if(match){ ME = match.id; saveMe(TRIP_ID, ME); }
+  if(match){ ME = match.id; saveMe(TRIP_ID, ME); setTimeout(linkTelegramToMe, 0); }
+}
+
+/* Если приложение открыто в Telegram и человек выбрал «кто я» — привязываем к участнику
+   его ник и фото, чтобы их видели все. Старый сервер операцию person.tg отвергает и
+   очередь встаёт колом, поэтому шлём только когда /api/health сообщил свежую версию. */
+function serverKnowsPersonTg(){ return !window.TRIP_API || SERVER_VERSION >= "2026-09-19"; }
+function fetchServerVersion(){
+  if(!window.TRIP_API || SERVER_VERSION) return;
+  fetch(apiUrl("/api/health"), {cache:"no-store"}).then(function(r){ return r.json(); })
+    .then(function(j){ SERVER_VERSION = String((j && j.version) || "0"); linkTelegramToMe(); })
+    .catch(function(){});
+}
+function linkTelegramToMe(){
+  if(!TG_PROFILE || !ME || !TRIP_ID || !S || !serverKnowsPersonTg()) return;
+  var p = personById(ME);
+  if(!p) return;
+  var cur = p.tg || {};
+  if(cur.id === TG_PROFILE.id && (cur.username||"") === TG_PROFILE.username && (cur.photo||"") === TG_PROFILE.photo) return;
+  commit("person.tg", {pid: ME, tgId: TG_PROFILE.id, username: TG_PROFILE.username, photo: TG_PROFILE.photo});
 }
 
 /* ========== применение локального действия: применить + поставить в очередь + отправить ========== */
@@ -652,7 +700,7 @@ function route(){
   stopPolling();
   var h = location.hash || "";
   // принимаем и «#t=<id>» (своя ссылка), и голый «#<id>» (так строил ссылку бот)
-  var m = h.match(/^#t=([^&]*)/) || h.match(/^#([A-Za-z0-9]{10,})$/);
+  var m = h.match(/^#t=([^&]*)/) || h.match(/^#([A-Za-z0-9]{10,})(?:&|$)/);
   if(m && m[1]){
     openTrip(decodeURIComponent(m[1]));
   } else {
@@ -686,6 +734,7 @@ function openTrip(id){
   renderTrip();
   startPolling();
   syncNow();
+  if(SERVER_VERSION) linkTelegramToMe(); else fetchServerVersion();
 }
 
 function tripLinkFor(id){ return location.origin + location.pathname + "#t=" + encodeURIComponent(id); }
@@ -888,6 +937,7 @@ function historyPhrase(entry){
     case "person.add": return T("history.person.add", {author:author, name:p.name||""});
     case "person.rename": return T("history.person.rename", {author:author, name:p.name||""});
     case "person.del": return T("history.person.del", {author:author});
+    case "person.tg": return T("history.person.tg", {author:author});
     case "cur.set": return T("history.cur.set", {author:author, code:p.code||""});
     case "cur.del": return T("history.cur.del", {author:author, code:p.code||""});
     case "expense.add": return T("history.expense.add", {author:author, title:p.title||T("expenses.noTitle"), amount:moneyRaw(Number(p.amount)||0, (p.cur||"USD").toUpperCase())});
@@ -970,7 +1020,7 @@ function renderTrip(){
     tr.forEach(function(t,i){
       var mine = (ME===t.from || ME===t.to);
       h.push('<div class="transfer'+(mine?' mine':'')+'">');
-      h.push('<div class="tr-body" data-act="whypair" data-i="'+i+'" role="button" tabindex="0" style="cursor:pointer"><span class="who">'+esc(nameOf(t.from))+'</span><span class="arrow">→</span><span class="who">'+esc(nameOf(t.to))+'</span><span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
+      h.push('<div class="tr-body" data-act="whypair" data-i="'+i+'" role="button" tabindex="0" style="cursor:pointer"><span class="who">'+personHTML(t.from)+'</span><span class="arrow">→</span><span class="who">'+personHTML(t.to)+'</span><span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
       h.push('<div class="tr-amt num">'+money(t.cents)+'</div>');
       h.push('<button class="btn btn-sm" data-act="settle" data-i="'+i+'">'+esc(T("transfers.settleBtn"))+'</button>');
       h.push("</div>");
@@ -985,7 +1035,7 @@ function renderTrip(){
     var pos = shown>0, zero = shown===0;
     var w = Math.round(Math.abs(shown)/maxAbs*100);
     h.push('<div class="bal'+(ME===r.id?' mine':'')+'" data-act="why" data-id="'+esc(r.id)+'" role="button" tabindex="0">');
-    h.push('<div class="bal-name">'+esc(r.name)+(ME===r.id?'<span class="you-tag">'+esc(T("balances.you"))+'</span>':'')+'<span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
+    h.push('<div class="bal-name">'+personHTML(r.id)+(ME===r.id?'<span class="you-tag">'+esc(T("balances.you"))+'</span>':'')+'<span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
     h.push('<div class="bal-sum num '+(zero?'muted':(pos?'pos':'neg'))+'">'+(zero?money(0):(pos?'+':'')+money(shown))+'</div>');
     var detail = r.settled ? T("balances.detailSettled",{paid:money(r.paid),share:money(r.share),settled:(r.settled>0?'+':'')+money(r.settled)}) : T("balances.detail",{paid:money(r.paid),share:money(r.share)});
     h.push('<div class="bal-sub num">'+esc(detail)+'</div>');
@@ -1024,7 +1074,7 @@ function renderTrip(){
       var perShareTxt = money(parts.length ? Math.round(cents/parts.length) : 0);
       h.push('<div class="exp">');
       h.push('<div class="exp-main"><div class="exp-title">'+esc(e.title || T("expenses.noTitle"))+(e.category?' <span class="catbadge">'+esc(CAT_ICON[e.category]||"")+" "+esc(T("category."+e.category))+'</span>':'')+'</div>');
-      h.push('<div class="exp-meta">'+esc(T(metaKey, {payer: nameOf(e.payer), forWhom: forWho, perShare: perShareTxt, note: e.note||""}))+'</div></div>');
+      h.push('<div class="exp-meta">'+avatarHTML(personById(e.payer))+' '+esc(T(metaKey, {payer: nameOf(e.payer), forWhom: forWho, perShare: perShareTxt, note: e.note||""}))+'</div></div>');
       h.push('<div class="exp-right"><div class="exp-amt num">'+moneyRaw(e.amount, e.cur)+'</div>');
       if(e.cur !== baseCode()) h.push('<div class="exp-conv num">'+money(cents)+'</div>');
       h.push('<div class="exp-acts"><button class="btn-ghost" data-act="edit" data-id="'+esc(e.id)+'">'+esc(T("expenses.edit"))+'</button><button class="btn-ghost" data-act="del" data-id="'+esc(e.id)+'">'+esc(T("expenses.delete"))+'</button></div>');
@@ -1036,9 +1086,9 @@ function renderTrip(){
   if(S.payments.length){
     h.push('<section><div class="eyebrow">'+esc(T("section.payments.title"))+'<span class="sp"></span><span class="count">'+S.payments.length+'</span></div><div class="card">');
     S.payments.slice().reverse().forEach(function(p){
-      h.push('<div class="list-line"><div style="flex:1"><b>'+esc(nameOf(p.from))+'</b> → <b>'+esc(nameOf(p.to))+'</b><div class="tiny muted">'+esc(dayLabel(p.date))+(p.note?' · '+esc(p.note):'')+'</div></div>'+
+      h.push('<div class="list-line"><div style="flex:1"><b class="pay-who">'+personHTML(p.from)+' → '+personHTML(p.to)+'</b><div class="tiny muted">'+esc(dayLabel(p.date))+(p.note?' · '+esc(p.note):'')+'</div></div>'+
              '<div class="num" style="font-weight:600">'+money(Math.round(p.amount*100))+'</div>'+
-             '<button class="btn-ghost" data-act="delpay" data-id="'+esc(p.id)+'">'+esc(T("payments.delete"))+'</button></div>');
+             '<button class="btn btn-sm" data-act="delpay" data-id="'+esc(p.id)+'" title="'+esc(T("payments.reopenHint"))+'">'+esc(T("payments.reopen"))+'</button></div>');
     });
     h.push("</div></section>");
   }
@@ -1193,6 +1243,7 @@ function setMe(id){
   ME = id || null;
   saveMe(TRIP_ID, ME);
   renderTrip();
+  linkTelegramToMe();
 }
 
 /* ========== действия: валюты ========== */
@@ -1279,7 +1330,7 @@ function setBaseCurrency(code){
 }
 
 /* ========== действия: платежи ========== */
-function deletePayment(id){ commit("payment.del", {payid:id}); }
+function deletePayment(id){ commit("payment.del", {payid:id}); toast(T("payments.reopened")); }
 
 /* ========== делегированные обработчики на #app (общие для обоих экранов) ========== */
 app.addEventListener("click", function(ev){
@@ -1299,6 +1350,9 @@ app.addEventListener("click", function(ev){
     case "del": confirmDeleteExpense(id); break;
     case "delpay": deletePayment(id); break;
     case "settle": openSettle(parseInt(t.getAttribute("data-i"),10)); break;
+    case "tglink":
+      if(TG && typeof TG.openTelegramLink === "function" && /^https:\/\/t\.me\//.test(t.href)){ ev.preventDefault(); TG.openTelegramLink(t.href); }
+      break;
     case "why": openWhy(id); break;
     case "whypair": openWhyPair(parseInt(t.getAttribute("data-i"),10)); break;
     case "addcur": addCurrencyInline(); break;

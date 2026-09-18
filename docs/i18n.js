@@ -144,6 +144,11 @@ window.I18N = {
 
     "section.payments.title": "Возвраты долгов",
     "payments.delete": "Удалить",
+    "payments.reopen": "Не отдал — вернуть",
+    "payments.reopenHint": "Отметка «отдал» снимется, долг вернётся в список «Кто кому отдаёт»",
+    "payments.reopened": "Долг снова в списке «Кто кому отдаёт»",
+    "tg.write": "написать",
+    "history.person.tg": "{author} привязал(а) свой Telegram",
 
     "category.food": "Еда",
     "category.transport": "Транспорт",
@@ -437,6 +442,11 @@ window.I18N = {
 
     "section.payments.title": "Qarz qaytarishlar",
     "payments.delete": "O'chirish",
+    "payments.reopen": "Bermagan — qaytarish",
+    "payments.reopenHint": "«Berdi» belgisi olinadi, qarz «Kim kimga beradi» ro'yxatiga qaytadi",
+    "payments.reopened": "Qarz yana «Kim kimga beradi» ro'yxatida",
+    "tg.write": "yozish",
+    "history.person.tg": "{author} o'z Telegramini bog'ladi",
 
     "category.food": "Ovqat",
     "category.transport": "Transport",
@@ -730,6 +740,11 @@ window.I18N = {
 
     "section.payments.title": "Debt settlements",
     "payments.delete": "Delete",
+    "payments.reopen": "Not paid — reopen",
+    "payments.reopenHint": "Removes the paid mark, the debt returns to Who pays whom",
+    "payments.reopened": "Debt is back in Who pays whom",
+    "tg.write": "message",
+    "history.person.tg": "{author} linked their Telegram",
 
     "category.food": "Food",
     "category.transport": "Transport",

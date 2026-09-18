@@ -42,7 +42,7 @@ const consts = [
   app.match(/var CATS = .*/)[0],
 ].join('\n');
 const cliFns = grab(app, [
-  'baseCode','baseStepCents','rateOf','expenseRate','expenseCents','toCents',
+  'cleanTgUsername','cleanTgPhoto','baseCode','baseStepCents','rateOf','expenseRate','expenseCents','toCents',
   'normalizeCategory','normalizeShares','expenseFromPayload','paymentFromPayload','applyOp',
   'shareCentsForExpense','compute','noiseFloorCents','pairItems','transfers','personById','nameOf',
 ]);

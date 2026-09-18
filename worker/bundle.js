@@ -870,7 +870,7 @@ const TRIP_ID_ALPHABET =
 
 const KNOWN_KINDS = new Set([
   'trip.meta',
-  'person.add', 'person.rename', 'person.del',
+  'person.add', 'person.rename', 'person.del', 'person.tg',
   'cur.set', 'cur.del',
   'expense.add', 'expense.edit', 'expense.del',
   'payment.add', 'payment.del',
@@ -1130,7 +1130,7 @@ async function handlePostOps(request, env, tripId, ctx) {
 }
 
 // Поднимать при каждом деплое: по /api/health видно, какой воркер живёт на сервере.
-const WORKER_VERSION = '2026-09-18c';
+const WORKER_VERSION = '2026-09-19';
 
 function handleHealth() {
   return jsonResponse({ ok: true, ts: Date.now(), version: WORKER_VERSION });

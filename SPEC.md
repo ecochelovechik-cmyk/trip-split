@@ -40,6 +40,7 @@
 | `person.add` | `{pid, name}` |
 | `person.rename` | `{pid, name}` |
 | `person.del` | `{pid}` |
+| `person.tg` | `{pid, tgId, username, photo}` — привязка Telegram к участнику (ник и аватар видят все); `tgId` пустой — отвязать. Сервер старше 2026-09-19 этот вид отвергает, клиент шлёт его только после проверки `/api/health`. |
 | `cur.set` | `{code, rate}` — курс: сколько базовой за 1 единицу `code` |
 | `cur.del` | `{code}` |
 | `expense.add` | `{eid, title, amount, cur, payer, parts:[pid], date:"YYYY-MM-DD", note, category?, shares?, rate?}` |
