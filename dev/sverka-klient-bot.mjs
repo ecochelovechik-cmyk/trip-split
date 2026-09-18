@@ -29,11 +29,11 @@ const ops = await fetch(`https://trip-split.ecochelovechik.workers.dev/api/trip/
 const NO_DEC = JSON.parse('{' + tg.match(/const NO_DEC = \{([\s\S]*?)\};/)[1]
   .replace(/(\w+):/g, '"$1":').replace(/,\s*$/, '') + '}');
 const botCode = grab(tg, ['reduceOps','rateOf','toCents','expenseRate','expenseCents',
-                          'isValidShares','computeBalances','computeTransfers']);
+                          'isValidShares','expenseShares','computeBalances','computeTransfers']);
 const bot = new Function('NO_DEC', botCode + '\nreturn {reduceOps, computeBalances, computeTransfers};')(NO_DEC);
 const stBot = bot.reduceOps(ops);
 const cBot = bot.computeBalances(stBot);
-const tBot = bot.computeTransfers(cBot.rows);
+const tBot = bot.computeTransfers(stBot);
 
 // ---- клиент ----
 const consts = [
@@ -44,7 +44,7 @@ const consts = [
 const cliFns = grab(app, [
   'baseCode','baseStepCents','rateOf','expenseRate','expenseCents','toCents',
   'normalizeCategory','normalizeShares','expenseFromPayload','paymentFromPayload','applyOp',
-  'shareCentsForExpense','compute','noiseFloorCents','transfers','personById','nameOf',
+  'shareCentsForExpense','compute','noiseFloorCents','pairItems','transfers','personById','nameOf',
 ]);
 const cli = new Function('window','OPS', `
   ${i18n}

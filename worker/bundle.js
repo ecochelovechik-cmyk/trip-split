@@ -286,6 +286,49 @@ function isValidShares(e) {
 }
 
 /**
+ * Доли одной траты по участникам, в центах базовой валюты. Сумма долей = сумме траты.
+ * parts — уже отфильтрованы по живым участникам и отсортированы по порядку списка людей.
+ */
+function expenseShares(state, e, parts) {
+  const out = {};
+  const cents = expenseCents(state, e);
+  if (isValidShares(e)) {
+    // валидный shares: каждая доля переводится в центы базовой валюты тем же
+    // курсом, что и вся трата; участники из parts без записи в shares — 0.
+    const rate = expenseRate(state, e);
+    parts.forEach((id) => {
+      const v = Object.prototype.hasOwnProperty.call(e.shares, id) ? Number(e.shares[id]) || 0 : 0;
+      out[id] = Math.round(v * rate * 100);
+    });
+    const remainder = cents - parts.reduce((s, id) => s + out[id], 0);
+    // остаток округления — по одной копейке первым участникам с ненулевой долей
+    const nonZero = parts.filter((id) => out[id] !== 0);
+    const targets = nonZero.length ? nonZero : parts;
+    if (targets.length) {
+      const step = remainder >= 0 ? 1 : -1;
+      const n = Math.abs(remainder);
+      for (let i = 0; i < n; i++) out[targets[i % targets.length]] += step;
+    }
+  } else {
+    // Шаг деления — наименьшая РЕАЛЬНАЯ единица базовой валюты (1 сум = 100 «центов»,
+    // 1 доллар = 1 цент). Иначе в сумах/вонах вылезают копейки, которых не существует.
+    // Клиент делит так же — docs/app.js, baseStepCents().
+    const step = NO_DEC[String(state.trip.base || "").toUpperCase()] ? 100 : 1;
+    const units = Math.floor(cents / step);
+    const per = Math.floor(units / parts.length);
+    const rem = units - per * parts.length;
+    let placed = 0;
+    parts.forEach((id, i) => {
+      out[id] = (per + (i < rem ? 1 : 0)) * step;
+      placed += out[id];
+    });
+    // остаток мельче шага — первому по списку, чтобы сумма долей сошлась с тратой
+    if (placed !== cents && parts.length) out[parts[0]] += cents - placed;
+  }
+  return out;
+}
+
+/**
  * Считает по состоянию: сколько кто заплатил, чья доля, баланс.
  * Все деньги — в целых центах базовой валюты.
  * @returns {{rows: Array<{id,name,paid,share,settled,balance}>, totalCents:number}}
@@ -305,47 +348,8 @@ function computeBalances(state) {
     // порядок участников — по порядку списка людей, детерминированно
     parts.sort((a, b) => order[a] - order[b]);
 
-    if (isValidShares(e)) {
-      // валидный shares: каждая доля переводится в центы базовой валюты тем же
-      // курсом, что и вся трата; участники из parts без записи в shares — 0.
-      const rate = expenseRate(state, e);
-      const converted = {};
-      parts.forEach((id) => {
-        const v = Object.prototype.hasOwnProperty.call(e.shares, id) ? Number(e.shares[id]) || 0 : 0;
-        converted[id] = Math.round(v * rate * 100);
-      });
-      const sumConverted = parts.reduce((s, id) => s + converted[id], 0);
-      const remainder = cents - sumConverted;
-      // остаток из-за отдельного округления долей — по одной копейке первым
-      // участникам с ненулевой долей (в порядке списка людей); если таких нет —
-      // всем участникам parts в порядке списка.
-      const nonZero = parts.filter((id) => converted[id] !== 0);
-      const targets = nonZero.length ? nonZero : parts;
-      if (targets.length) {
-        const step = remainder >= 0 ? 1 : -1;
-        const n = Math.abs(remainder);
-        for (let i = 0; i < n; i++) {
-          converted[targets[i % targets.length]] += step;
-        }
-      }
-      parts.forEach((id) => { share[id] += converted[id]; });
-    } else {
-      // Шаг деления — наименьшая РЕАЛЬНАЯ единица базовой валюты (1 сум = 100 «центов»,
-      // 1 доллар = 1 цент). Иначе в сумах/вонах вылезают копейки, которых не существует.
-      // Клиент делит так же — docs/app.js, baseStepCents().
-      const step = NO_DEC[String(state.trip.base || "").toUpperCase()] ? 100 : 1;
-      const units = Math.floor(cents / step);
-      const per = Math.floor(units / parts.length);
-      const rem = units - per * parts.length;
-      let placed = 0;
-      parts.forEach((id, i) => {
-        const v = (per + (i < rem ? 1 : 0)) * step;
-        share[id] += v;
-        placed += v;
-      });
-      // остаток мельче шага — первому по списку, чтобы сумма долей сошлась с тратой
-      if (placed !== cents && parts.length) share[parts[0]] += cents - placed;
-    }
+    const sc = expenseShares(state, e, parts);
+    parts.forEach((id) => { share[id] += sc[id] || 0; });
   }
 
   const settled = {};
@@ -370,28 +374,42 @@ function computeBalances(state) {
 }
 
 /**
- * Жадный взаимозачёт: крупнейший должник -> крупнейшему кредитору, пока не сойдётся.
- * @param {Array<{id,balance}>} rows
+ * Кто кому отдаёт — ПОПАРНО: каждый отдаёт тому, кто за него платил. Встречные долги
+ * внутри пары зачитываются, возвраты (payments) уменьшают долг именно этой пары.
+ * К минимуму переводов НЕ сводим: человек должен видеть, кому и за что он должен.
+ * Клиент считает так же — docs/app.js, transfers().
  * @returns {Array<{from,to,cents}>}
  */
-function computeTransfers(rows) {
-  const debt = rows.filter((r) => r.balance < 0)
-    .map((r) => ({ id: r.id, v: -r.balance }))
-    .sort((a, b) => b.v - a.v);
-  const cred = rows.filter((r) => r.balance > 0)
-    .map((r) => ({ id: r.id, v: r.balance }))
-    .sort((a, b) => b.v - a.v);
+function computeTransfers(state) {
+  const order = {};
+  state.people.forEach((p, i) => { order[p.id] = i; });
+  const has = (id) => Object.prototype.hasOwnProperty.call(order, id);
+  const owe = {}; // owe["from|to"] = центы
+  const add = (from, to, c) => { if (from !== to && c) owe[from + "|" + to] = (owe[from + "|" + to] || 0) + c; };
 
-  const out = [];
-  let i = 0, j = 0;
-  while (i < debt.length && j < cred.length) {
-    const m = Math.min(debt[i].v, cred[j].v);
-    if (m > 0) out.push({ from: debt[i].id, to: cred[j].id, cents: m });
-    debt[i].v -= m; cred[j].v -= m;
-    if (debt[i].v <= 0) i++;
-    if (cred[j].v <= 0) j++;
+  for (const e of state.expenses) {
+    const cents = expenseCents(state, e);
+    const parts = (e.parts || []).filter(has).sort((a, b) => order[a] - order[b]);
+    if (!parts.length || !cents || !has(e.payer)) continue;
+    const sc = expenseShares(state, e, parts);
+    parts.forEach((id) => add(id, e.payer, sc[id] || 0));
   }
-  return out;
+  for (const pay of state.payments) {
+    if (!has(pay.from) || !has(pay.to)) continue;
+    add(pay.from, pay.to, -Math.round((Number(pay.amount) || 0) * 100));
+  }
+
+  const floor = NO_DEC[String(state.trip.base || "").toUpperCase()] ? 100 : 5;
+  const ids = state.people.map((p) => p.id);
+  const out = [];
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const n = (owe[ids[i] + "|" + ids[j]] || 0) - (owe[ids[j] + "|" + ids[i]] || 0);
+      if (n > floor) out.push({ from: ids[i], to: ids[j], cents: n });
+      else if (n < -floor) out.push({ from: ids[j], to: ids[i], cents: -n });
+    }
+  }
+  return out.sort((a, b) => b.cents - a.cents);
 }
 
 // =============================================================================
@@ -469,7 +487,7 @@ function tripLinkFor(env, tripId) {
 
 function formatSummary(state, trip) {
   const { rows, totalCents } = computeBalances(state);
-  const transfers = computeTransfers(rows);
+  const transfers = computeTransfers(state);
   const base = state.trip.base;
 
   const lines = [];
@@ -705,7 +723,7 @@ async function sendDailyDigest(env) {
       }
 
       const { rows } = computeBalances(state);
-      const transfers = computeTransfers(rows);
+      const transfers = computeTransfers(state);
       const base = state.trip.base;
 
       const lines = [];
@@ -806,7 +824,7 @@ async function notifyTripOps(env, trip, appliedIds, author) {
     if (!lines.length) return; // пришла только настройка — молчим
 
     const { rows } = computeBalances(state);
-    const transfers = computeTransfers(rows);
+    const transfers = computeTransfers(state);
     const base = state.trip.base;
 
     const out = [];
@@ -1112,7 +1130,7 @@ async function handlePostOps(request, env, tripId, ctx) {
 }
 
 // Поднимать при каждом деплое: по /api/health видно, какой воркер живёт на сервере.
-const WORKER_VERSION = '2026-09-18b';
+const WORKER_VERSION = '2026-09-18c';
 
 function handleHealth() {
   return jsonResponse({ ok: true, ts: Date.now(), version: WORKER_VERSION });

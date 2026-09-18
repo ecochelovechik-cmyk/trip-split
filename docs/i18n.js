@@ -88,7 +88,9 @@ window.I18N = {
     "why.splitAmong": "на {n} чел.",
     "why.paidTotal": "Заплатил за всех",
     "why.forOthers": "из них за других {amount}",
-    "why.netHint": "Итоговые переводы считаются взаимозачётом: долги разным людям сводятся к минимуму переводов, поэтому «кому отдать» в списке переводов может отличаться от того, кто платил.",
+    "why.netHint": "Каждый отдаёт тому, кто за него платил. Встречные долги между двумя людьми зачитываются.",
+    "why.pair.paidFor": "{payer} платил за {who}",
+    "why.pair.total": "Итого {from} → {to}",
     "table.section.why": "За что каждый должен",
     "table.why.total": "Итого доля",
 
@@ -379,7 +381,9 @@ window.I18N = {
     "why.splitAmong": "{n} kishiga",
     "why.paidTotal": "Hamma uchun to'lagan",
     "why.forOthers": "shundan boshqalar uchun {amount}",
-    "why.netHint": "Yakuniy o'tkazmalar o'zaro hisob-kitob bilan hisoblanadi: qarzlar eng kam o'tkazmaga keltiriladi, shuning uchun «kimga berish» to'laganidan farq qilishi mumkin.",
+    "why.netHint": "Har kim o'zi uchun to'lagan odamga qaytaradi. Ikki kishi o'rtasidagi qarama-qarshi qarzlar hisobga olinadi.",
+    "why.pair.paidFor": "{payer} {who} uchun to'lagan",
+    "why.pair.total": "Jami {from} → {to}",
     "table.section.why": "Har kim nima uchun qarzdor",
     "table.why.total": "Jami ulush",
 
@@ -670,7 +674,9 @@ window.I18N = {
     "why.splitAmong": "split among {n}",
     "why.paidTotal": "Paid for everyone",
     "why.forOthers": "of which for others {amount}",
-    "why.netHint": "Final transfers are netted: debts to different people are reduced to the fewest transfers, so “pay to” in the transfers list may differ from who actually paid.",
+    "why.netHint": "Everyone pays back the person who paid for them. Debts in both directions between two people are offset.",
+    "why.pair.paidFor": "{payer} paid for {who}",
+    "why.pair.total": "Total {from} → {to}",
     "table.section.why": "What each person owes for",
     "table.why.total": "Total share",
 

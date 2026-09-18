@@ -413,19 +413,47 @@ function compute(){
 function noiseFloorCents(){ return NO_DEC[baseCode()] ? 100 : 5; }
 function withoutNoise(cents){ return Math.abs(cents) <= noiseFloorCents() ? 0 : cents; }
 
-function transfers(rows){
+/* Из чего складывается долг внутри пары a↔b: траты, где платил один, а участвовал
+   другой, и возвраты между ними. sign=+1 — a должен b, −1 — b должен a. */
+function pairItems(a, b){
+  var order = {};
+  S.people.forEach(function(p,i){ order[p.id]=i; });
+  var items = [], net = 0;
+  S.expenses.slice().sort(function(x,y){ return (x.date||"") < (y.date||"") ? -1 : 1; }).forEach(function(e){
+    if(e.payer !== a && e.payer !== b) return;
+    var other = e.payer === a ? b : a;
+    if((e.parts||[]).indexOf(other) < 0 || !expenseCents(e)) return;
+    var c = shareCentsForExpense(e, order)[other] || 0;
+    if(!c) return;
+    var sign = e.payer === b ? 1 : -1;
+    items.push({e:e, cents:c, sign:sign});
+    net += sign*c;
+  });
+  S.payments.forEach(function(p){
+    if(!((p.from===a && p.to===b) || (p.from===b && p.to===a))) return;
+    var c = Math.round((Number(p.amount)||0)*100);
+    var sign = p.from === a ? -1 : 1;
+    items.push({pay:p, cents:c, sign:sign});
+    net += sign*c;
+  });
+  return { items:items, net:net };
+}
+
+/* Кто кому отдаёт — ПОПАРНО: каждый отдаёт тому, кто за него платил; встречные долги
+   внутри пары зачитываются. К минимуму переводов не сводим — иначе непонятно, за что
+   и кому платишь. Бот считает так же — worker/telegram.js, computeTransfers(). */
+function transfers(){
   var floor = noiseFloorCents();
-  var debt = rows.filter(function(r){return r.balance < -floor;}).map(function(r){return {id:r.id, v:-r.balance};}).sort(function(a,b){return b.v-a.v;});
-  var cred = rows.filter(function(r){return r.balance > floor;}).map(function(r){return {id:r.id, v:r.balance};}).sort(function(a,b){return b.v-a.v;});
-  var out = [], i=0, j=0;
-  while(i<debt.length && j<cred.length){
-    var m = Math.min(debt[i].v, cred[j].v);
-    if(m > floor) out.push({from:debt[i].id, to:cred[j].id, cents:m});
-    debt[i].v -= m; cred[j].v -= m;
-    if(debt[i].v<=0) i++;
-    if(cred[j].v<=0) j++;
+  var ids = S.people.map(function(p){ return p.id; });
+  var out = [];
+  for(var i=0;i<ids.length;i++){
+    for(var j=i+1;j<ids.length;j++){
+      var n = pairItems(ids[i], ids[j]).net;
+      if(n > floor) out.push({from:ids[i], to:ids[j], cents:n});
+      else if(n < -floor) out.push({from:ids[j], to:ids[i], cents:-n});
+    }
   }
-  return out;
+  return out.sort(function(x,y){ return y.cents - x.cents; });
 }
 
 /* Расшифровка по одному участнику: из каких трат сложилась его доля (и кто за
@@ -942,7 +970,7 @@ function renderTrip(){
     tr.forEach(function(t,i){
       var mine = (ME===t.from || ME===t.to);
       h.push('<div class="transfer'+(mine?' mine':'')+'">');
-      h.push('<div class="tr-body"><span class="who">'+esc(nameOf(t.from))+'</span><span class="arrow">→</span><span class="who">'+esc(nameOf(t.to))+'</span></div>');
+      h.push('<div class="tr-body" data-act="whypair" data-i="'+i+'" role="button" tabindex="0" style="cursor:pointer"><span class="who">'+esc(nameOf(t.from))+'</span><span class="arrow">→</span><span class="who">'+esc(nameOf(t.to))+'</span><span class="bal-why">'+esc(T("balances.why"))+'</span></div>');
       h.push('<div class="tr-amt num">'+money(t.cents)+'</div>');
       h.push('<button class="btn btn-sm" data-act="settle" data-i="'+i+'">'+esc(T("transfers.settleBtn"))+'</button>');
       h.push("</div>");
@@ -1272,6 +1300,7 @@ app.addEventListener("click", function(ev){
     case "delpay": deletePayment(id); break;
     case "settle": openSettle(parseInt(t.getAttribute("data-i"),10)); break;
     case "why": openWhy(id); break;
+    case "whypair": openWhyPair(parseInt(t.getAttribute("data-i"),10)); break;
     case "addcur": addCurrencyInline(); break;
     case "spendAddCur": addSpendCurrencyInline(); break;
     case "appUpdate": forceUpdateApp(); break;
@@ -1667,6 +1696,36 @@ function openWhy(pid){
   }
   h.push('<div class="hint">'+esc(T("why.netHint"))+'</div>');
   modal(T("why.title", {name:p.name}), h.join(""), '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("modal.close"))+'</button>');
+}
+
+/* Модалка «за что» для строки перевода: из каких трат сложился долг внутри пары. */
+function openWhyPair(i){
+  var t = transfers()[i];
+  if(!t) return;
+  var from = nameOf(t.from), to = nameOf(t.to);
+  var pi = pairItems(t.from, t.to);
+  var h = [];
+  function line(title, sub, amount){
+    return '<div class="why-line"><div class="why-txt"><div>'+esc(title)+'</div>'+(sub?'<div class="hint">'+esc(sub)+'</div>':'')+'</div><div class="num why-sum">'+esc(amount)+'</div></div>';
+  }
+  var plus = pi.items.filter(function(x){ return x.e && x.sign > 0; });
+  var minus = pi.items.filter(function(x){ return x.e && x.sign < 0; });
+  var pays = pi.items.filter(function(x){ return x.pay; });
+  function group(head, list){
+    if(!list.length) return;
+    var total = list.reduce(function(s,x){ return s + x.cents; }, 0);
+    h.push('<div class="why-group"><div class="why-group-head">'+esc(head)+'<span class="num">'+esc(money(total))+'</span></div>');
+    list.forEach(function(x){
+      if(x.e) h.push(line(x.e.title || T("expenses.noTitle"), (x.e.date||"") + " · " + moneyRaw(x.e.amount, x.e.cur) + " · " + T("why.splitAmong", {n:(x.e.parts||[]).length}), money(x.cents)));
+      else h.push(line(nameOf(x.pay.from)+" → "+nameOf(x.pay.to), x.pay.date||"", money(x.cents)));
+    });
+    h.push('</div>');
+  }
+  group(T("why.pair.paidFor", {payer:to, who:from}), plus);
+  group(T("why.pair.paidFor", {payer:from, who:to}), minus);
+  group(T("section.payments.title"), pays);
+  h.push('<div class="why-head">'+esc(T("why.pair.total", {from:from, to:to}))+'<b class="num">'+esc(money(t.cents))+'</b></div>');
+  modal(from+" → "+to, h.join(""), '<div style="flex:1"></div><button class="btn" data-close>'+esc(T("modal.close"))+'</button>');
 }
 
 /* ========== итог текстом ========== */
